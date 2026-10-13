@@ -1,0 +1,34 @@
+body:not([data-status="idle"]) .rewind-act, body[data-mode="terminal"] .rewind-act, .agent-view .rewind-act { display: none; }
+
+.rewind-pop {
+  position: fixed;
+  z-index: 40;
+  width: 260px;
+  padding: 10px 6px 8px;
+  border-radius: 12px;
+  background: var(--surface-solid);
+  box-shadow: 0 0 0 1px var(--line), 0 12px 36px var(--shadow);
+  font-size: 12.5px;
+  outline: none;
+}
+.rewind-title { font-weight: 600; padding: 0 8px; }
+.rewind-sub { color: var(--muted); font-size: 11.5px; padding: 2px 8px 6px; }
+.rewind-list { display: flex; flex-direction: column; gap: 1px; }
+.rewind-choice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.rewind-choice.active:not(:disabled) { background: var(--accent-soft); }
+.rewind-choice:disabled { opacity: 0.45; cursor: default; }
+.rewind-key { width: 16px; color: var(--muted); font: 11px var(--mono); text-align: center; }
+.rewind-files { color: var(--muted); font-size: 11.5px; padding: 6px 8px 0; border-top: 1px solid var(--line); margin-top: 6px; }

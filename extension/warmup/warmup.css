@@ -1,0 +1,16 @@
+html, body { height: 100%; margin: 0; }
+body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--muxy-background);
+}
+.spinner {
+  width: 26px;
+  height: 26px;
+  border: 2.5px solid var(--muxy-border);
+  border-top-color: var(--muxy-accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }

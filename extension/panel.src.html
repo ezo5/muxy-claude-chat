@@ -1,0 +1,91 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude Chat</title>
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/transcript.css">
+<link rel="stylesheet" href="css/markdown.css">
+<link rel="stylesheet" href="css/composer.css">
+<link rel="stylesheet" href="css/pins.css">
+<link rel="stylesheet" href="css/agents.css">
+<link rel="stylesheet" href="css/prompt.css">
+<link rel="stylesheet" href="css/review.css">
+<link rel="stylesheet" href="css/rewind.css">
+</head>
+<body>
+<header id="topbar" class="topbar">
+  <button id="pins-btn" class="hdr-btn" title="Pinned messages"></button>
+  <div class="title-block">
+    <div id="title" class="title" title="Double-click to rename">Claude</div>
+    <div id="subtitle" class="subtitle"></div>
+  </div>
+  <button id="model-btn" class="chip-btn model-chip hidden" title="Model and effort (click to switch)"></button>
+  <button id="start-btn" class="chip-btn primary hidden" title="Start Claude again on this conversation">Start</button>
+  <span id="status" class="status"></span>
+  <div id="view-seg" class="rv-seg view-seg">
+    <button id="chat-btn" type="button" class="active">Chat</button>
+    <button id="terminal-btn" type="button">Terminal</button>
+  </div>
+  <div class="hdr-actions">
+    <button id="settings-btn" class="hdr-btn" title="Settings"></button>
+    <button id="stop-btn" class="hdr-btn hidden" title="Stop Claude in this chat"></button>
+    <button id="new-btn" class="hdr-btn" title="New chat"></button>
+  </div>
+</header>
+<div class="body-row">
+<aside id="pins" class="pins hidden"></aside>
+<div class="chat-col">
+<main id="scroller" class="scroller"></main>
+<button id="jump" class="jump hidden" title="Jump to latest"></button>
+<footer id="footer" class="footer"></footer>
+<section id="review" class="review hidden"></section>
+</div>
+<aside id="agents" class="agents hidden"></aside>
+</div>
+<script src="js/boot.js"></script>
+<script src="vendor/marked.min.js"></script>
+<script src="vendor/highlight.min.js"></script>
+<script src="js/reader-src.js"></script>
+<script src="js/icons.js"></script>
+<script src="js/util.js"></script>
+<script src="js/theme.js"></script>
+<script src="js/host.js"></script>
+<script src="js/markdown.js"></script>
+<script src="js/tools.js"></script>
+<script src="js/images.js"></script>
+<script src="js/core/store.js"></script>
+<script src="js/core/agent.js"></script>
+<script src="js/core/mirror.js"></script>
+<script src="js/core/modes.js"></script>
+<script src="js/adapters/events.js"></script>
+<script src="js/adapters/transcript.js"></script>
+<script src="js/review-note.js"></script>
+<script src="js/transcript.js"></script>
+<script src="js/find.js"></script>
+<script src="js/pins.js"></script>
+<script src="js/agents.js"></script>
+<script src="js/review.js"></script>
+<script src="js/typography.js"></script>
+<script src="js/settings.js"></script>
+<script src="js/export.js"></script>
+<script src="js/rewind.js"></script>
+<script src="js/composer/composer.js"></script>
+<script src="js/composer/popup.js"></script>
+<script src="js/composer/slash.js"></script>
+<script src="js/composer/mention.js"></script>
+<script src="js/composer/history.js"></script>
+<script src="js/composer/attachments.js"></script>
+<script src="js/composer/todos.js"></script>
+<script src="js/composer/queue.js"></script>
+<script src="js/composer/drafts.js"></script>
+<script src="js/composer/suggest.js"></script>
+<script src="js/composer/approvals.js"></script>
+<script src="js/composer/resume.js"></script>
+<script src="js/composer/pickers.js"></script>
+<script src="js/composer/mode.js"></script>
+<script src="js/composer/usage.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

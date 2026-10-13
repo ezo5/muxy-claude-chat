@@ -1,0 +1,63 @@
+{
+  "name": "claude-chat",
+  "version": "2.0.0",
+  "scripts": {
+    "build": "python3 build.py"
+  },
+  "muxy": {
+    "description": "Chat UI for Claude Code: runs claude -p as a managed agent per tab, or mirrors a Claude running in a terminal pane",
+    "permissions": [
+      "panes:read",
+      "panes:write",
+      "tabs:read",
+      "tabs:write",
+      "commands:exec",
+      "commands:run-script",
+      "notifications:write",
+      "storage:read",
+      "storage:write",
+      "projects:read",
+      "panels:write"
+    ],
+    "background": "background.js",
+    "events": [
+      "tab.closed",
+      "project.switched"
+    ],
+    "commands": [
+      {
+        "id": "open-tab",
+        "title": "Claude Chat: Open Tab for Focused Pane",
+        "action": {
+          "kind": "runScript",
+          "script": "scripts/open-chat-tab.js"
+        },
+        "defaultShortcut": "ctrl+opt+c"
+      },
+      {
+        "id": "new-chat",
+        "title": "Claude Chat: New Chat",
+        "action": {
+          "kind": "runScript",
+          "script": "scripts/new-chat.js"
+        },
+        "defaultShortcut": "cmd+shift+n"
+      }
+    ],
+    "topbarItems": [
+      {
+        "id": "chat",
+        "icon": "bubble.left.and.bubble.right",
+        "command": "open-tab",
+        "tooltip": "Claude Chat"
+      }
+    ],
+    "tabTypes": [
+      {
+        "id": "chat",
+        "title": "Claude Chat",
+        "entry": "panel.html"
+      }
+    ]
+  }
+}

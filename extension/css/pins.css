@@ -1,0 +1,34 @@
+.pins {
+  width: 250px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--line);
+  background: var(--bg);
+  min-height: 0;
+}
+.pins-head { display: flex; align-items: baseline; gap: 8px; padding: 14px 16px 8px; font-size: 13px; font-weight: 600; }
+.pins-count { font-weight: 500; font-size: 12px; color: var(--muted); }
+.pins-list { flex: 1; overflow-y: auto; padding: 0 8px 14px; display: flex; flex-direction: column; gap: 2px; }
+.pins-empty { color: var(--muted); font-size: 12.5px; padding: 2px 8px; line-height: 1.5; }
+.pin-item { padding: 8px 10px; border-radius: 10px; cursor: pointer; }
+.pin-item:hover { background: var(--hover); }
+.pin-top { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); }
+.pin-who { font-weight: 600; color: var(--fg); }
+.pin-who.claude { color: var(--accent); }
+.pin-time { flex: 1; }
+.pin-remove { border: 0; background: transparent; color: var(--muted); cursor: pointer; padding: 2px; border-radius: 5px; display: inline-flex; opacity: 0; }
+.pin-remove .icon { width: 12px; height: 12px; }
+.pin-item:hover .pin-remove, .pin-remove:focus-visible { opacity: 1; }
+.pin-remove:hover { color: var(--fg); background: var(--hover); }
+.pin-text { font-size: 12.5px; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; margin-top: 2px; }
+
+.pinned > .msg-actions .pin-btn { color: var(--accent); }
+.assistant-text.pinned::before { content: ""; position: absolute; left: 3px; top: 12px; bottom: 12px; width: 2px; border-radius: 2px; background: var(--accent); opacity: 0.55; }
+.row.pinned .bubble { box-shadow: 0 0 0 1px var(--accent-soft), 3px 0 0 0 var(--accent); }
+.flash { animation: pin-flash 1.4s ease-out; }
+@keyframes pin-flash { 0%, 30% { background: var(--accent-soft); } 100% { background: transparent; } }
+
+@media (max-width: 720px) {
+  .pins { position: absolute; top: 48px; bottom: 0; left: 0; z-index: 20; max-width: calc(100vw - 40px); border-right: 0; box-shadow: 8px 0 28px var(--shadow); }
+}

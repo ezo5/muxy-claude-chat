@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Code color scheme (Settings → Typography → Code): Muxy theme (default, tokens derived from the muxy theme), IntelliJ
+  or Material One Dark, shared by code blocks in the chat and the Review diff.
 - Clicking an http(s) link offers Open in Muxy browser (a muxy browser tab), Open in default browser (the Mac's,
   through the open-file bridge — rerun `host/install.sh`) and Copy link; Cmd+click still copies.
 - Local slash commands with native cards (`js/composer/commands.js` + one file per command in

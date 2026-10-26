@@ -930,7 +930,7 @@ def op_history(cwd, limit=300):
 
 
 def op_files(req):
-    cwd = req.get("cwd") or "."
+    cwd = live_cwd(req.get("cwd") or ".")
     q = (req.get("q") or "").lower()
     files = []
     try:
@@ -983,8 +983,16 @@ UNTRACKED_MAX = 200
 UNTRACKED_BYTES = 512000
 
 
+# A removed worktree `{repo}-{id}` (ticket-board human-testing moves its changes to the main checkout): use `{repo}`.
+def live_cwd(cwd):
+    p = (cwd or ".").rstrip("/") or "/"
+    while not os.path.isdir(p) and re.search(r"-[^/-]+$", p):
+        p = re.sub(r"-[^/-]+$", "", p)
+    return p if os.path.isdir(p) else cwd
+
+
 def git(cwd, args, timeout=20):
-    return subprocess.run(["git", "-c", "core.quotePath=false"] + args, cwd=cwd, capture_output=True, text=True, errors="replace", timeout=timeout)
+    return subprocess.run(["git", "-c", "core.quotePath=false"] + args, cwd=live_cwd(cwd), capture_output=True, text=True, errors="replace", timeout=timeout)
 
 
 def diff_path(s):
@@ -1179,8 +1187,10 @@ def op_diff(req):
         files = turn_files(req["file"], req["turn"], budget)
         root = git(cwd, ["rev-parse", "--show-toplevel"]).stdout.strip() or cwd
         for f in files:
-            if f["path"].startswith(root + "/"):
-                f["path"] = f["path"][len(root) + 1:]
+            for r in (root, cwd.rstrip("/")):
+                if f["path"].startswith(r + "/"):
+                    f["path"] = f["path"][len(r) + 1:]
+                    break
         return {"root": root, "files": files, "truncated": budget[0] <= 0}
     try:
         r = git(cwd, ["rev-parse", "--show-toplevel"])

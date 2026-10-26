@@ -3,9 +3,10 @@ window.CC = window.CC || {};
 // Chat typography stored in muxy.storage (shared by all chat tabs) and applied as CSS variables on :root.
 CC.typography = (function () {
   const KEY = "settings:typography";
-  const DEFAULTS = { font: "sans", customFont: "", size: 14.5, lineHeight: 1.6, codeFont: "mono", customCodeFont: "", codeSize: 12.5, width: "md", renderMarkdown: true };
+  const DEFAULTS = { font: "sans", customFont: "", size: 14.5, lineHeight: 1.6, codeFont: "mono", customCodeFont: "", codeSize: 12.5, codeScheme: "theme", width: "md", renderMarkdown: true };
   const FONTS = [["sans", "System sans", "var(--sans)"], ["serif", "Serif", "var(--serif)"], ["mono", "Monospace", "var(--mono)"], ["custom", "Custom…", null]];
   const WIDTHS = [["md", "MD", "768px"], ["lg", "LG", "980px"], ["xl", "XL", "1240px"]];
+  const CODE_SCHEMES = [["theme", "Muxy theme"], ["intellij", "IntelliJ"], ["one-dark", "Material One Dark"]];
   const CODE_FONTS = [["mono", "System monospace", null], ["custom", "Custom…", null]];
   const MONO = getComputedStyle(document.documentElement).getPropertyValue("--mono").trim();
   let current = Object.assign({}, DEFAULTS);
@@ -29,6 +30,11 @@ CC.typography = (function () {
     root.setProperty("--chat-lh", String(s.lineHeight));
     root.setProperty("--mono", s.codeFont === "custom" ? family(s.customCodeFont, MONO) : MONO);
     root.setProperty("--code-size", s.codeSize + "px");
+    if (s.codeScheme !== "theme") {
+      document.documentElement.dataset.codeScheme = s.codeScheme;
+    } else {
+      delete document.documentElement.dataset.codeScheme;
+    }
     const width = WIDTHS.find(function (w) {
       return w[0] === s.width;
     });
@@ -73,6 +79,15 @@ CC.typography = (function () {
     }, 400);
   }
 
+  // muxy storage has no change events: a tab picks up settings changed in another tab when it gets focus.
+  if (window.muxy != null && typeof muxy.onFocus === "function") {
+    muxy.onFocus(function (focused) {
+      if (focused) {
+        load();
+      }
+    });
+  }
+
   // Families installed on the Mac; empty when the server cannot ask it (no open-file bridge).
   let installed = null;
   function fonts() {
@@ -101,6 +116,7 @@ CC.typography = (function () {
     DEFAULTS: DEFAULTS,
     FONTS: FONTS,
     CODE_FONTS: CODE_FONTS,
+    CODE_SCHEMES: CODE_SCHEMES,
     WIDTHS: WIDTHS,
     fonts: fonts,
     load: load,

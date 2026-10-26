@@ -68,6 +68,8 @@
 .code-block pre { margin: 0; padding: 10px 14px 12px; overflow: auto; max-height: 520px; }
 .code-block code { font: var(--code-size)/1.6 var(--mono); white-space: pre; tab-size: 4; }
 .tool-body .code-block { margin: 0; background: var(--well-soft); }
+.code-block:not(.output) { background: var(--tk-bg, var(--well)); }
+.tool-body .code-block:not(.output) { background: var(--tk-bg, var(--well-soft)); }
 .tool-body .code-head { min-height: 24px; padding-left: 12px; }
 .tool-body .code-block pre { max-height: 340px; padding: 8px 12px 10px; }
 .tool-body .code-block code { font-size: 11.5px; color: color-mix(in srgb, var(--fg) 78%, var(--muted)); }
@@ -76,19 +78,51 @@
 .code-block.output.err .code-lang { color: color-mix(in srgb, var(--danger), var(--fg) var(--ink)); }
 .code-block.output.err code { color: color-mix(in srgb, var(--danger) 50%, var(--fg)); }
 
-.hljs { color: var(--fg); }
-.hljs-comment, .hljs-quote { color: var(--muted); font-style: italic; }
-.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-doctag, .hljs-section { color: color-mix(in srgb, var(--accent), var(--fg) var(--ink)); }
-.hljs-string, .hljs-regexp, .hljs-addition, .hljs-attribute, .hljs-meta .hljs-string { color: color-mix(in srgb, var(--add), var(--fg) var(--ink)); }
-.hljs-number, .hljs-symbol, .hljs-bullet, .hljs-link { color: color-mix(in srgb, var(--warn), var(--fg) var(--ink)); }
-.hljs-title, .hljs-title.class_, .hljs-title.function_ { color: color-mix(in srgb, var(--hunk), var(--fg) var(--ink)); }
-.hljs-built_in, .hljs-type, .hljs-class .hljs-title { color: color-mix(in srgb, var(--warn), var(--fg) var(--ink)); }
-.hljs-attr, .hljs-variable, .hljs-template-variable, .hljs-selector-id, .hljs-selector-class, .hljs-name, .hljs-tag { color: color-mix(in srgb, var(--del) 75%, var(--fg)); }
-.hljs-params { color: var(--fg); }
-.hljs-meta { color: color-mix(in srgb, var(--hunk), var(--fg) var(--ink)); }
+/* code color scheme (Settings → Typography): tokens follow the muxy theme unless data-code-scheme picks a fixed one */
+:root {
+  --tk-fg: var(--fg);
+  --tk-kw: color-mix(in srgb, var(--accent), var(--fg) var(--ink));
+  --tk-str: color-mix(in srgb, var(--add), var(--fg) var(--ink));
+  --tk-num: color-mix(in srgb, var(--warn), var(--fg) var(--ink));
+  --tk-com: var(--muted);
+  --tk-doc: var(--muted);
+  --tk-ann: color-mix(in srgb, var(--hunk), var(--fg) var(--ink));
+  --tk-fn: color-mix(in srgb, var(--hunk), var(--fg) var(--ink));
+  --tk-type: color-mix(in srgb, var(--warn), var(--fg) var(--ink));
+  --tk-field: color-mix(in srgb, var(--del) 75%, var(--fg));
+  --tk-tag: color-mix(in srgb, var(--del) 75%, var(--fg));
+}
+:root[data-code-scheme="intellij"] {
+  --tk-kw: #cf8e6d; --tk-str: #6aab73; --tk-num: #2aacb8; --tk-com: #7a7e85; --tk-doc: #5f826b; --tk-ann: #b3ae60;
+  --tk-fn: #56a8f5; --tk-field: #c77dbb; --tk-type: #e0b973; --tk-tag: #d5b778;
+}
+:root[data-code-scheme="intellij"][data-scheme="light"] {
+  --tk-kw: #0033b3; --tk-str: #067d17; --tk-num: #1750eb; --tk-com: #8c8c8c; --tk-doc: #8c8c8c; --tk-ann: #9e880d;
+  --tk-fn: #00627a; --tk-field: #871094; --tk-type: #8a5200; --tk-tag: #0033b3;
+}
+:root[data-code-scheme="one-dark"] {
+  /* Atom One Dark (Material) IntelliJ scheme */
+  --tk-bg: #24272d; --tk-fg: #abb2bf; --tk-ln: #636d83; --tk-kw-style: italic;
+  --tk-kw: #c679dd; --tk-str: #98c379; --tk-num: #d19a66; --tk-com: #59626f; --tk-doc: #c679dd; --tk-ann: #61aeef;
+  --tk-fn: #61aeef; --tk-field: #e06c75; --tk-type: #e5c17c; --tk-tag: #f07178;
+  --tk-add-bg: #374b2c; --tk-del-bg: #41454b; --tk-add-hover: #3f5633; --tk-del-hover: #4a4f56;
+}
+:root[data-code-scheme] .code-block:not(.output) code { color: var(--tk-fg); }
+
+:is(.hljs, .rv-code) .hljs-keyword, :is(.hljs, .rv-code) .hljs-literal, :is(.hljs, .rv-code) .hljs-variable.language_, :is(.hljs, .rv-code) .hljs-selector-tag, :is(.hljs, .rv-code) .hljs-bullet { color: var(--tk-kw); font-style: var(--tk-kw-style, normal); }
+:is(.hljs, .rv-code) .hljs-string, :is(.hljs, .rv-code) .hljs-regexp, :is(.hljs, .rv-code) .hljs-char, :is(.hljs, .rv-code) .hljs-link, :is(.hljs, .rv-code) .hljs-code, .hljs-addition { color: var(--tk-str); }
+:is(.hljs, .rv-code) .hljs-number, :is(.hljs, .rv-code) .hljs-symbol { color: var(--tk-num); }
+:is(.hljs, .rv-code) .hljs-comment, :is(.hljs, .rv-code) .hljs-quote { color: var(--tk-com); font-style: italic; }
+:is(.hljs, .rv-code) .hljs-doctag { color: var(--tk-doc); font-style: italic; font-weight: 600; }
+:is(.hljs, .rv-code) .hljs-meta { color: var(--tk-ann); }
+:is(.hljs, .rv-code) .hljs-title, :is(.hljs, .rv-code) .hljs-title.function_, :is(.hljs, .rv-code) .hljs-section, :is(.hljs, .rv-code) .hljs-selector-pseudo { color: var(--tk-fn); }
+:is(.hljs, .rv-code) .hljs-type, :is(.hljs, .rv-code) .hljs-built_in, :is(.hljs, .rv-code) .hljs-title.class_ { color: var(--tk-type); }
+:is(.hljs, .rv-code) .hljs-property, :is(.hljs, .rv-code) .hljs-attr, :is(.hljs, .rv-code) .hljs-attribute, :is(.hljs, .rv-code) .hljs-variable, :is(.hljs, .rv-code) .hljs-template-variable { color: var(--tk-field); }
+:is(.hljs, .rv-code) .hljs-name, :is(.hljs, .rv-code) .hljs-selector-class, :is(.hljs, .rv-code) .hljs-selector-id { color: var(--tk-tag); }
+:is(.hljs, .rv-code) .hljs-tag { color: var(--muted); }
 .hljs-deletion { color: color-mix(in srgb, var(--del), var(--fg) var(--ink)); }
-.hljs-emphasis { font-style: italic; }
-.hljs-strong { font-weight: bold; }
+:is(.hljs, .rv-code) .hljs-section, :is(.hljs, .rv-code) .hljs-strong { font-weight: 600; }
+:is(.hljs, .rv-code) .hljs-emphasis { font-style: italic; }
 
 .path-menu {
   position: fixed;

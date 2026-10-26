@@ -241,9 +241,25 @@ CC.Settings = (function () {
     this.slider(code, "Size", 10, 18, 0.5, s.codeSize, px, function (v) {
       t.save({ codeSize: v });
     });
+    const schemeRow = el("div", "settings-field");
+    schemeRow.appendChild(el("label", "settings-label", "Color scheme"));
+    const schemeCtl = el("div", "settings-ctl");
+    const scheme = el("select", "settings-select");
+    t.CODE_SCHEMES.forEach(function (o) {
+      const opt = el("option", "", o[1]);
+      opt.value = o[0];
+      opt.selected = o[0] === s.codeScheme;
+      scheme.appendChild(opt);
+    });
+    scheme.addEventListener("change", function () {
+      t.save({ codeScheme: scheme.value });
+    });
+    schemeCtl.appendChild(scheme);
+    schemeRow.appendChild(schemeCtl);
+    code.appendChild(schemeRow);
     const preview = this.group(body, "Preview");
     const sample = el("div", "settings-preview");
-    sample.appendChild(CC.markdown.render("The quick brown fox jumps over the lazy dog. Příliš žluťoučký kůň úpěl ďábelské ódy — run `npm test` before you push.\n\n```js\nconst answer = 42;\n```"));
+    sample.appendChild(CC.markdown.render("The quick brown fox jumps over the lazy dog. Příliš žluťoučký kůň úpěl ďábelské ódy — run `npm test` before you push.\n\n```js\n// the answer\nfunction answer(name) {\n  return { name: \"deep thought\", value: 42 };\n}\n```"));
     preview.appendChild(sample);
     const reset = el("button", "settings-action", "Reset to defaults");
     reset.type = "button";

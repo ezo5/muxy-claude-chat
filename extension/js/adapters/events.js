@@ -146,6 +146,11 @@ CC.adapters.events = (function () {
     return typeof ts === "number" ? new Date(ts).toISOString() : ts || null;
   }
 
+  // initialize reply / result: fast_mode_state "off"|"cooldown"|"on" and why it cannot serve (absent when nothing blocks it).
+  function fastMode(o) {
+    return o.fast_mode_state != null ? { state: o.fast_mode_state, reason: o.fast_mode_disabled_reason || null } : null;
+  }
+
   function Events(store) {
     this.store = store;
     this.lastSeq = store.lastSeq || 0;
@@ -354,6 +359,9 @@ CC.adapters.events = (function () {
   Events.prototype.on_result = function (ev, ts) {
     this.finishPartials(null);
     const meta = { cost: ev.total_cost_usd, usage: ev.usage || null };
+    if (ev.fast_mode_state != null) {
+      meta.fastMode = fastMode(ev);
+    }
     if (ev.modelUsage != null) {
       meta.tokens = this.tokenTotals(ev.modelUsage);
     }
@@ -376,7 +384,7 @@ CC.adapters.events = (function () {
   };
 
   // modelUsage is cumulative per CLI process (subagents and compaction included) and restarts at zero after /clear;
-  // sum = [input, cache write, cache read, output] over all processes, base = the process's last cumulative value.
+  // sum = [input, cache write, cache read, output] since the last /clear, base = the process's last cumulative value.
   Events.prototype.tokenTotals = function (modelUsage) {
     const cur = [0, 0, 0, 0];
     Object.keys(modelUsage).forEach(function (k) {
@@ -402,6 +410,7 @@ CC.adapters.events = (function () {
       const meta = {
         sessionId: ev.session_id, cwd: ev.cwd, modelId: ev.model, permissionMode: ev.permissionMode, cliVersion: ev.claude_code_version,
         capabilities: ev.capabilities || [], skills: ev.skills || [], outputStyle: ev.output_style,
+        plugins: ev.plugins || [], memoryPaths: ev.memory_paths || null,
       };
       if (this.store.meta.firstCliSessionId == null && ev.session_id) {
         meta.firstCliSessionId = ev.session_id;
@@ -422,23 +431,13 @@ CC.adapters.events = (function () {
       this.store.setMeta({ activity: ev.status || null });
     } else if (st === "task_started") {
       this.tasks[ev.task_id] = ev;
-      if (ev.tool_use_id) {
-        this.store.setTask(ev.tool_use_id, { taskId: ev.task_id, description: ev.description || null, type: ev.subagent_type || ev.task_type || null,
-          backgrounded: ev.is_backgrounded === true, status: "running", startedAt: ts, endedAt: null });
-      }
-    } else if (st === "task_updated") {
-      const started = this.tasks[ev.task_id];
-      const patch = ev.patch || {};
-      if (started != null && started.tool_use_id && (patch.status || patch.end_time)) {
-        this.store.setTask(started.tool_use_id, { status: patch.status || "running", endedAt: patch.end_time != null ? iso(patch.end_time) : ts });
-      }
     } else if (st === "task_notification") {
       const task = this.tasks[ev.task_id] || {};
-      const tid = ev.tool_use_id || task.tool_use_id;
-      if (tid) {
-        this.store.setTask(tid, { status: ev.status || "completed", summary: ev.summary || null, endedAt: ts, ms: ev.usage != null ? ev.usage.duration_ms || null : null, outputFile: ev.output_file || null });
-      }
-      if (task.is_backgrounded === true) {
+      const report = ev.handback_report != null ? ev.handback_report.text : null;
+      // a SubagentHandback report replaces the notice, whose summary only points at the report
+      if (report && task.owned_by_subagent !== true) {
+        this.put({ k: "notice", ts: ts, id: uid, level: "handback", agentId: ev.task_id, text: task.description || "Subagent", detail: report, status: ev.status || null });
+      } else if (task.is_backgrounded === true) {
         this.put({ k: "notice", ts: ts, id: uid, level: "task", text: (task.description || ev.summary || "Background task") + (ev.summary && task.description ? ": " + ev.summary : ""), status: ev.status || null });
       }
     } else if ((st === "informational" || st === "api_error") && ev.content) {
@@ -455,7 +454,8 @@ CC.adapters.events = (function () {
       this.put({ k: "user", ts: ts, id: ev.uuid || ("reset:" + this.lastSeq), text: "/clear", command: true });
     }
     if (ev.new_conversation_id) {
-      this.store.setMeta({ suggestion: null, cliSessionId: ev.new_conversation_id, resets: (this.store.meta.resets || []).concat([{ from: this.store.meta.cliSessionId || null, to: ev.new_conversation_id, ts: ts }]) });
+      const tokens = this.store.meta.tokens;
+      this.store.setMeta({ suggestion: null, tokens: tokens != null ? { sum: [0, 0, 0, 0], base: tokens.base } : null, cliSessionId: ev.new_conversation_id, resets: (this.store.meta.resets || []).concat([{ from: this.store.meta.cliSessionId || null, to: ev.new_conversation_id, ts: ts }]) });
     }
   };
 
@@ -469,8 +469,12 @@ CC.adapters.events = (function () {
   Events.prototype.on_control_response = function (ev) {
     const res = ev.response || {};
     const body = res.response || {};
-    if (res.request_id === "init" || body.commands != null) {
-      this.store.setMeta({ commands: body.commands || [], models: body.models || [], account: body.account || null, outputStyle: body.output_style || this.store.meta.outputStyle });
+    if (body.plugins != null) {
+      this.store.setMeta({ plugins: body.plugins, agentDefs: body.agents || this.store.meta.agentDefs });
+    } else if (res.request_id === "init" || body.commands != null) {
+      this.store.setMeta({ commands: body.commands || [], models: body.models || [], account: body.account || null, outputStyle: body.output_style || this.store.meta.outputStyle,
+        outputStyles: body.available_output_styles || this.store.meta.outputStyles || null, fastMode: fastMode(body) || this.store.meta.fastMode || null,
+        agentDefs: body.agents || this.store.meta.agentDefs || [] });
     }
   };
 
@@ -544,7 +548,7 @@ CC.adapters.events = (function () {
     }
     const meta = {};
     ["model", "effort", "permissionMode", "contextUsage", "rateLimit", "cost", "usage", "cwd", "sessionId", "cliSessionId", "models", "commands",
-      "capabilities", "cliVersion", "turn", "activity", "stoppedAt", "title"].forEach(function (k) {
+      "capabilities", "cliVersion", "turn", "activity", "startedAt", "stoppedAt", "title", "addDirs"].forEach(function (k) {
       if (s[k] != null) {
         meta[k] = s[k];
       }

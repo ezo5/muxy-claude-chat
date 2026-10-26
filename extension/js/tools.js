@@ -312,7 +312,7 @@ CC.tools = (function () {
       if (isWrite) {
         const content = String(input.content || "");
         c.body.textContent = "";
-        c.body.appendChild(md.codeBlock(content, md.langFromPath(input.file_path), { title: path }));
+        c.body.appendChild(md.fileBlock(content, input.file_path, { title: path, cwd: ctx.cwd }));
         countBadge(c.meta, content.split("\n").length, 0);
       } else {
         const d = inputDiff(item.name, input);
@@ -378,7 +378,7 @@ CC.tools = (function () {
           c.body.appendChild(outputBlock(resultText(r), "Error", true));
         } else if (r.text) {
           const text = resultText(r).replace(/^ *\d+\t/gm, "");
-          c.body.appendChild(md.codeBlock(text, md.langFromPath(input.file_path), { title: util.shortPath(input.file_path, ctx.cwd) }));
+          c.body.appendChild(md.fileBlock(text, input.file_path, { title: util.shortPath(input.file_path, ctx.cwd), cwd: ctx.cwd }));
         }
         finish(c, r);
       },
@@ -443,6 +443,8 @@ CC.tools = (function () {
     };
   };
 
+  const HANDBACK_POINTER = /report was delivered to you as a message from .*SubagentHandback call/;
+
   function agentRenderer(item) {
     const input = item.input || {};
     const c = card("agent", "bot");
@@ -470,7 +472,8 @@ CC.tools = (function () {
         if (ex.totalTokens) {
           c.meta.title = util.fmtTokens(ex.totalTokens) + " tokens";
         }
-        if (r.text) {
+        // a SubagentHandback report comes as its own item; the result only points at it
+        if (r.text && !HANDBACK_POINTER.test(r.text)) {
           const res = el("div", "agent-result");
           res.appendChild(md.render(resultText(r)));
           c.body.appendChild(res);

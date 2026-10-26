@@ -3,7 +3,7 @@ import fcntl, json, os, signal, subprocess, sys, time, uuid
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import config, procs
+import agent_tracker, config, procs
 import state as S
 import tui
 
@@ -72,8 +72,6 @@ def running(req):
 
 def op_start(req):
     cwd = req.get("cwd") or ""
-    if not os.path.isdir(cwd):
-        raise SystemExit("cwd not found: %s" % cwd)
     sid = req.get("sessionId") or str(uuid.uuid4())
     d = config.session_dir(sid)
     os.makedirs(d, exist_ok=True)
@@ -81,6 +79,8 @@ def op_start(req):
         st = load_state(d, have_lock=True)
         if st and st.get("status") != "stopped":
             return {"sessionId": sid, "pid": st.get("pid"), "started": False}
+        if not os.path.isdir(cwd):
+            raise SystemExit("cwd not found: %s" % cwd)
         if not config.claude_bin():
             raise SystemExit("claude binary not found (PATH, ~/.local/bin/claude or config claudeBin)")
         prev = st or {}
@@ -88,6 +88,8 @@ def op_start(req):
         resume = req.get("resume")
         if resume is None:
             resume = bool(prev.get("lastSeq"))
+        if resume:
+            tui.adopt_transcript(os.path.abspath(cwd), cli_sid)
         # --resume of a conversation the CLI never wrote loops on "No conversation found": start fresh under the same id
         if resume and not os.path.isfile(tui.transcript_path(os.path.abspath(cwd), cli_sid)):
             resume = False
@@ -96,7 +98,9 @@ def op_start(req):
                 "fork": bool(req.get("forkSession")), "partial": req.get("partial", True) is not False,
                 "model": req.get("model") or (prev.get("model") if resume else None),
                 "effort": req.get("effort") or (prev.get("effort") if resume else None),
-                "permissionMode": req.get("permissionMode") or (prev.get("permissionMode") if resume and prev.get("permissionMode") in PERMISSION_MODES else None)}
+                "permissionMode": req.get("permissionMode") or (prev.get("permissionMode") if resume and prev.get("permissionMode") in PERMISSION_MODES else None),
+                "pluginDirs": req.get("pluginDirs") or prev.get("pluginDirs"), "addDirs": req.get("addDirs") or prev.get("addDirs"),
+                "appendSystemPromptFile": req.get("appendSystemPromptFile") or prev.get("appendSystemPromptFile")}
         with open(os.path.join(d, "daemon.log"), "ab") as log:
             p = subprocess.Popen([sys.executable, DAEMON, d, json.dumps(args)], cwd=args["cwd"], stdin=subprocess.DEVNULL, stdout=log, stderr=log,
                                  start_new_session=True, close_fds=True)
@@ -249,6 +253,11 @@ def op_state(req):
     return state_or_stub(d, req.get("sessionId"))
 
 
+def agent_rows(st):
+    rows = st.get("agents") if isinstance(st.get("agents"), list) else []
+    return agent_tracker.settle(rows, st.get("status") != "stopped", (st.get("startedAt") or 0) / 1000.0)
+
+
 def op_list(req):
     out = []
     try:
@@ -261,7 +270,8 @@ def op_list(req):
         if not st or (req.get("cwd") and st.get("cwd") != req["cwd"]):
             continue
         out.append({"sessionId": sid, "cwd": st.get("cwd"), "status": st.get("status"), "pid": st.get("pid"), "lastSeq": st.get("lastSeq"),
-                    "updatedAt": st.get("updatedAt"), "model": st.get("model"), "reason": st.get("reason"), "cliSessionId": st.get("cliSessionId")})
+                    "updatedAt": st.get("updatedAt"), "model": st.get("model"), "reason": st.get("reason"), "cliSessionId": st.get("cliSessionId"),
+                    "lastSkill": st.get("lastSkill"), "agents": agent_tracker.counts(agent_rows(st))})
     out.sort(key=lambda s: -(s["updatedAt"] or 0))
     return {"sessions": out}
 

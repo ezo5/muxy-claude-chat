@@ -44,6 +44,8 @@ CC.exportMarkdown = (function () {
         } else {
           block("Claude", line);
         }
+      } else if (it.k === "notice" && it.level === "handback") {
+        block("Claude", "> " + (it.text || "Subagent") + " report:\n\n" + it.detail);
       } else if (it.k === "notice") {
         block(speaker || "Claude", "> " + util.firstLine(it.text, 300));
       }

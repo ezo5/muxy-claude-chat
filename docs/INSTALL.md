@@ -7,7 +7,7 @@ claude-chat is a Muxy 2.x extension. It has three parts:
   `~/.local/share/claude-chat/` on the computer where Claude Code runs. That computer is the Mac itself (a local
   project) or a Linux box that Muxy reaches over SSH (a remote project). It runs `claude -p` for every chat tab.
 - **Open-file bridge** (`host/open-bridge.zsh`): an optional LaunchAgent. It lets a chat on a remote server open
-  files in Zed, IntelliJ or Finder on the Mac.
+  files in Zed, IntelliJ or Finder and links in the default browser on the Mac.
 
 `host/install.sh` sets up all three from the Mac. It needs only what macOS ships: zsh, `plutil`, `osascript` and
 `launchctl`. It does not need Homebrew, node or Python on the Mac.

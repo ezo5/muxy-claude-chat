@@ -25,6 +25,7 @@ CC.Store = (function () {
   };
 
   const RUN_KINDS = { read: "explore", search: "explore", bash: "bash", edit: "edit", web: "web" };
+  const INLINE_NOTICES = { task: true, handback: true, interrupt: true };
 
   function stepKind(item) {
     if (item.k === "thinking") {
@@ -78,7 +79,6 @@ CC.Store = (function () {
     this.items = [];
     this.index = new Map();
     this.results = new Map();
-    this.tasks = new Map();
     this.lastSeq = 0;
     if (silent !== true) {
       this.emit("reset");
@@ -238,15 +238,6 @@ CC.Store = (function () {
     if (this.pending.length !== before) {
       this.emit("state", this);
     }
-  };
-
-  // Subagent / background task state from system/task_* events, keyed by the tool_use_id that spawned the task.
-  Store.prototype.setTask = function (toolUseId, patch) {
-    const task = this.tasks.get(toolUseId) || { toolUseId: toolUseId };
-    Object.assign(task, patch || {});
-    this.tasks.set(toolUseId, task);
-    this.emit("tasks", task);
-    return task;
   };
 
   // The main agent's task list since the last /clear: TodoWrite snapshots (older models) or the TaskCreate /
@@ -442,7 +433,7 @@ CC.Store = (function () {
   };
 
   // Assistant turns with their step groups, the same grouping the renderer uses: consecutive steps form one
-  // group; text, standalone cards and task / interrupt notices start a new one.
+  // group; text, standalone cards and task / handback / interrupt notices start a new one.
   Store.prototype.turns = function () {
     const turns = [];
     let cur = null;
@@ -460,7 +451,7 @@ CC.Store = (function () {
       if (it.k === "result" || it.agent != null) {
         return;
       }
-      if (it.k === "user" || (it.k === "notice" && it.level !== "task" && it.level !== "interrupt")) {
+      if (it.k === "user" || (it.k === "notice" && !INLINE_NOTICES[it.level])) {
         close(true);
         return;
       }

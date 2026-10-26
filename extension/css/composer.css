@@ -192,7 +192,7 @@
 .u-label { opacity: 0.85; }
 .u-val { font-variant-numeric: tabular-nums; }
 .u-extra { opacity: 0.7; font-variant-numeric: tabular-nums; }
-.u-tokens { margin-left: auto; flex: none; opacity: 0.8; font-variant-numeric: tabular-nums; }
+.u-tokens { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 6px; opacity: 0.8; font-variant-numeric: tabular-nums; }
 .u-model { color: var(--fg); opacity: 0.9; flex: none; }
 .u-effort { opacity: 0.6; margin-left: 4px; }
 .u-meter {
@@ -217,7 +217,7 @@
   .composer[data-status="idle"] .tb-hint { display: none; }
 }
 @container (max-width: 400px) {
-  .u-tokens, .u-chip .u-meter { display: none; }
+  .u-tokens .u-label, .u-chip .u-meter { display: none; }
   .usage-strip { gap: 10px; }
 }
 

@@ -1,10 +1,10 @@
 window.CC = window.CC || {};
 
-// Permission-mode chip in the toolbar: cycles default → acceptEdits → plan → default through set_permission_mode.
+// Permission-mode chip in the toolbar: cycles default → acceptEdits → plan → auto → default through set_permission_mode.
 CC.Composer.use(function (composer) {
   const util = CC.util;
   const el = util.el;
-  const CYCLE = { default: "acceptEdits", acceptEdits: "plan", plan: "default" };
+  const CYCLE = { default: "acceptEdits", acceptEdits: "plan", plan: "auto", auto: "default" };
   const MODES = { default: "Ask before edits", acceptEdits: "Accept edits", plan: "Plan mode", auto: "Auto", bypassPermissions: "Bypass permissions", dontAsk: "Don't ask" };
   let busy = false;
 

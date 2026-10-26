@@ -1,7 +1,7 @@
 window.CC = window.CC || {};
 
-// `/resume` without arguments: a picker of the project's earlier conversations. The pick restarts the agent on that
-// session id (`claude --resume`).
+// `/resume` (`/continue`) without arguments: a picker of the project's earlier conversations; with an id or a unique id
+// prefix it resumes that one. Both restart the agent on the session id (`claude --resume`).
 CC.Composer.use(function (composer) {
   const util = CC.util;
   const el = util.el;
@@ -17,13 +17,40 @@ CC.Composer.use(function (composer) {
   let seq = 0;
 
   composer.on("beforeSubmit", function () {
-    if (!/^\/(resume|continue)\s*$/.test(composer.value())) {
+    const m = /^\/(resume|continue)(?:\s+(\S+))?\s*$/.exec(composer.value().trim());
+    if (m == null) {
       return false;
     }
     composer.setValue("");
-    open();
+    if (m[2] != null) {
+      resumeId(m[2]);
+    } else {
+      open();
+    }
     return true;
   });
+
+  async function resumeId(q) {
+    try {
+      const res = await composer.deps.sessions();
+      const list = res.sessions || [];
+      let hits = list.filter(function (s) {
+        return s.id === q;
+      });
+      if (hits.length === 0) {
+        hits = list.filter(function (s) {
+          return s.id.indexOf(q) === 0;
+        });
+      }
+      if (hits.length !== 1) {
+        util.toast(hits.length === 0 ? "No conversation with id " + q : q + " matches " + hits.length + " conversations — type more of the id", "error");
+        return;
+      }
+      pick(hits[0]);
+    } catch (e) {
+      util.toast("Cannot list conversations: " + (e && e.message ? e.message : e), "error");
+    }
+  }
 
   function ago(ms) {
     const s = Math.max(0, (Date.now() - ms) / 1000);

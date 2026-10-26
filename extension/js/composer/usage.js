@@ -1,6 +1,6 @@
 window.CC = window.CC || {};
 
-// Strip under the composer (5h, 7d, tokens) and the context ring next to Send; each opens its card. Data:
+// Strip under the composer (5h, 7d, session tokens) and the context ring in the toolbar; each opens its card. Data:
 // get_context_usage, rate_limit_event and result.modelUsage from the daemon; the statusline `stats` op only fills what is missing.
 CC.Composer.use(function (composer) {
   const util = CC.util;
@@ -23,7 +23,7 @@ CC.Composer.use(function (composer) {
 
   const ring = el("button", "tb-btn ctx-ring hidden");
   ring.type = "button";
-  composer.right.insertBefore(ring, composer.sendBtn);
+  composer.left.appendChild(ring);
   const ctxCard = el("div", "usage-card ctx-card hidden");
   composer.above.appendChild(ctxCard);
 
@@ -84,19 +84,27 @@ CC.Composer.use(function (composer) {
     return sameDay ? time : d.toLocaleDateString([], { weekday: "short" }) + " " + time;
   }
 
-  // Input counts cached tokens too.
+  // Input counts cached tokens too; the statusline totals cover terminal mode, where no result events arrive.
   function tokenTotals() {
     const t = composer.meta.tokens;
     if (t == null) {
-      return null;
+      const p = stats && stats.status ? stats.status.payload : null;
+      const cw = p && p.context_window;
+      if (cw == null || cw.total_input_tokens == null) {
+        return null;
+      }
+      return { input: cw.total_input_tokens || 0, output: cw.total_output_tokens || 0 };
     }
     const s = t.sum;
     return { input: s[0] + s[1] + s[2], fresh: s[0], write: s[1], read: s[2], output: s[3] };
   }
 
   function tokenTitle(t) {
-    return "Tokens in this session\nInput: " + util.fmtTokens(t.input) + " (" + util.fmtTokens(t.read) + " cache read, "
-      + util.fmtTokens(t.write) + " cache write, " + util.fmtTokens(t.fresh) + " uncached)\nOutput: " + util.fmtTokens(t.output);
+    let title = "Tokens in this session: " + util.fmtTokens(t.input + t.output) + "\nInput: " + util.fmtTokens(t.input);
+    if (t.read != null) {
+      title += " (" + util.fmtTokens(t.read) + " cache read, " + util.fmtTokens(t.write) + " cache write, " + util.fmtTokens(t.fresh) + " uncached)";
+    }
+    return title + "\nOutput: " + util.fmtTokens(t.output);
   }
 
   function fmtDur(ms) {
@@ -206,7 +214,10 @@ CC.Composer.use(function (composer) {
     }
     const tok = tokenTotals();
     if (tok != null && tok.input + tok.output > 0) {
-      const t = el("span", "u-tokens", "↑" + util.fmtTokens(tok.input) + " ↓" + util.fmtTokens(tok.output));
+      const t = el("span", "u-tokens");
+      t.appendChild(el("span", "u-label", "Session"));
+      t.appendChild(el("span", "u-total", util.fmtTokens(tok.input + tok.output) + " tokens"));
+      t.appendChild(el("span", "u-extra", "↑" + util.fmtTokens(tok.input) + " ↓" + util.fmtTokens(tok.output)));
       t.title = tokenTitle(tok);
       strip.appendChild(t);
     }
@@ -391,7 +402,7 @@ CC.Composer.use(function (composer) {
   }
 
   async function poll() {
-    if (limits() != null && context() != null) {
+    if (limits() != null && context() != null && composer.meta.tokens != null) {
       render();
       return;
     }

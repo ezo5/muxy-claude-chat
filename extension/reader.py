@@ -1,4 +1,8 @@
-import base64, datetime, glob, json, os, re, shutil, subprocess, sys, time
+import base64, glob, json, os, re, shutil, subprocess, sys, time
+
+# build.py swaps these two lines for the module source: READER_SRC runs as `python3 -c`, without files next to it.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "server", "claude_chat"))
+import agent_tracker as tracker
 
 HOME = os.path.expanduser("~")
 CLAUDE = os.path.join(HOME, ".claude")
@@ -16,6 +20,7 @@ PASTED_RE = re.compile(r'\s*</?pasted_content(?:\s+id="[^"]*")?>[ \t]*\n?')
 STDOUT_RE = re.compile(r"<local-command-(stdout|stderr)>(.*?)</local-command-\1>", re.S)
 TASK_RE = re.compile(r"<task-notification>.*?<summary>(.*?)</summary>.*?</task-notification>", re.S)
 STATUS_RE = re.compile(r"<status>(.*?)</status>")
+HANDBACK_POINTER = "(its SubagentHandback call)"
 
 
 def clip(s, n=CLIP):
@@ -234,8 +239,15 @@ def dead_uuids(path):
     return dead
 
 
+# A subagent's SubagentHandback report (a meta user message or a queued command); the description of its Agent call
+# when that is in the same chunk, else the page looks it up.
+def handback(origin, uid, ts, descs):
+    return {"k": "notice", "ts": ts, "id": uid, "level": "handback", "agentId": origin.get("from"), "text": descs.get(origin.get("from")),
+            "detail": clip(origin.get("handbackReportText") or "", 40000)}
+
+
 def parse(lines, meta, sidechain=False, dead=()):
-    items = []
+    items, descs = [], {}
     for line in lines:
         try:
             e = json.loads(line)
@@ -265,7 +277,9 @@ def parse(lines, meta, sidechain=False, dead=()):
             elif a.get("type") == "queued_command" and isinstance(a.get("prompt"), str) and not e.get("isSidechain"):
                 p = a["prompt"]
                 m = TASK_RE.search(p)
-                if m:
+                if (a.get("origin") or {}).get("handback"):
+                    items.append(handback(a["origin"], e.get("uuid"), ts, descs))
+                elif m and HANDBACK_POINTER not in p:
                     st = STATUS_RE.search(p)
                     items.append({"k": "notice", "ts": ts, "id": e.get("uuid"), "level": "task", "text": m.group(1).strip(), "status": st.group(1) if st else None})
                 elif not p.lstrip().startswith("<"):
@@ -317,11 +331,16 @@ def parse(lines, meta, sidechain=False, dead=()):
                     ex = result_extra(None, e.get("toolUseResult"))
                     if ex:
                         item["extra"] = ex
+                        if ex.get("agentId"):
+                            descs[ex["agentId"]] = descs.get(b.get("tool_use_id"))
                     items.append(item)
                 elif bt == "text":
                     texts.append(b.get("text", ""))
                 elif bt == "image":
                     images += 1
+            if (e.get("origin") or {}).get("handback"):
+                items.append(handback(e["origin"], uid, ts, descs))
+                continue
             if e.get("isMeta") or not (texts or images):
                 continue
             txt = PASTED_RE.sub("\n", "\n".join(texts)).strip()
@@ -343,6 +362,8 @@ def parse(lines, meta, sidechain=False, dead=()):
                     items.append({"k": "notice", "ts": ts, "id": uid, "level": "command", "text": clip(out, 8000)})
                 continue
             m = TASK_RE.search(txt) if s.startswith("<task-notification") else None
+            if m and HANDBACK_POINTER in txt:
+                continue
             if m:
                 st = STATUS_RE.search(txt)
                 items.append({"k": "notice", "ts": ts, "id": uid, "level": "task", "text": m.group(1).strip(), "status": st.group(1) if st else None})
@@ -369,6 +390,8 @@ def parse(lines, meta, sidechain=False, dead=()):
                 elif bt == "tool_use" and b.get("name") == "SubagentHandback" and isinstance((b.get("input") or {}).get("message"), str):
                     items.append({"k": "text", "ts": ts, "id": bid, "text": b["input"]["message"], "err": False})
                 elif bt in ("tool_use", "server_tool_use"):
+                    if b.get("name") in ("Agent", "Task"):
+                        descs[b.get("id")] = (b.get("input") or {}).get("description")
                     items.append({"k": "tool", "ts": ts, "id": b.get("id"), "name": b.get("name"), "input": tool_input(b.get("name"), b.get("input"))})
             usage = msg.get("usage")
             if isinstance(usage, dict):
@@ -451,30 +474,35 @@ def daemon_state_path(sid):
     return os.path.join(STATE, "sessions", sid, "state.json") if re.fullmatch(r"[A-Za-z0-9_-]{1,80}", sid or "") else None
 
 
-# A headless daemon has no ~/.claude/sessions entry and -p transcripts lack task notifications: its state.json knows.
-def daemon_agent_status(path, agent_id):
+def read_json(path):
     try:
         with open(path) as fh:
-            st = json.load(fh)
+            return json.load(fh)
     except Exception:
         return None
-    task = (st.get("tasks") or {}).get(agent_id)
-    if task == "running":
-        return "running" if st.get("status") != "stopped" and isinstance(st.get("pid"), int) and alive(st["pid"]) else "stopped"
-    return TASK_STATUS.get(task, "done") if task else None
+
+
+# Chat mode: the daemon's rows decide while its CLI runs; a stopped daemon leaves the transcript to the TUI (if any).
+def chat_state(path):
+    st = read_json(path) if path else None
+    if st and st.get("status") != "stopped" and isinstance(st.get("pid"), int) and alive(st["pid"]) and isinstance(st.get("agents"), list):
+        return st
+    return None
+
+
+def daemon_agent_status(path, agent_id):
+    st = chat_state(path)
+    rows = tracker.settle([r for r in st["agents"] if r.get("agentId") == agent_id], True, (st.get("startedAt") or 0) / 1000.0) if st else []
+    return rows[-1]["status"] if rows else None
 
 
 def agent_status(f, daemon=None):
     inline = "#" in f
-    path = daemon_state_path(daemon) if not inline else None
-    if path:
-        st = daemon_agent_status(path, os.path.basename(f)[6:-6])
-        if st:
-            return st
-    parent = f.split("#")[0] if inline else os.path.dirname(os.path.dirname(f)) + ".jsonl"
-    sid = os.path.basename(parent)[:-6]
-    alive = any(s["sessionId"] == sid for s in live_sessions(None))
-    a = next((a for a in session_agents(parent, alive) if a.get("inline" if inline else "file") == f), None)
+    st = None if inline else daemon_agent_status(daemon_state_path(daemon), os.path.basename(f)[6:-6])
+    if st:
+        return st
+    main = f.split("#")[0] if inline else os.path.dirname(os.path.dirname(f)) + ".jsonl"
+    a = next((a for a in session_rows(main, daemon) if a.get("inline" if inline else "file") == f), None)
     return a["status"] if a else "stopped"
 
 
@@ -522,7 +550,8 @@ def op_poll(req):
     }
     task_state = daemon_state_path(req.get("daemon")) if sidechain and "#" not in path else None
     if task_state:
-        res["watch"]["task"] = [task_state, os.path.basename(path)[6:-6], res["agentStatus"], mtime(task_state)]
+        agent_id = os.path.basename(path)[6:-6]
+        res["watch"]["task"] = [task_state, agent_id, daemon_agent_status(task_state, agent_id), mtime(task_state)]
     if path is None or not os.path.exists(path):
         res["offset"] = 0
         res["start"] = 0
@@ -564,7 +593,7 @@ def op_wait(req):
             return {"changed": "file"}
         if task and mtime(task[0]) != task[3]:
             task[3] = mtime(task[0])
-            if daemon_agent_status(task[0], task[1]) not in (None, task[2]):
+            if daemon_agent_status(task[0], task[1]) != task[2]:
                 return {"changed": "task"}
         if w.get("pid"):
             if not alive(w["pid"]) or pid_state(w["pid"]) != w.get("state"):
@@ -611,11 +640,6 @@ def op_older(req):
     return {"items": items, "start": start, "meta": meta}
 
 
-TASK_ID_RE = re.compile(r"<tool-use-id>(.*?)</tool-use-id>")
-TASK_AGENT_RE = re.compile(r"<task-id>(.*?)</task-id>")
-DURATION_RE = re.compile(r"<duration_ms>(\d+)</duration_ms>")
-
-
 def tail_lines(path, size):
     try:
         total = os.path.getsize(path)
@@ -659,16 +683,8 @@ def agent_activity(path):
     return out
 
 
-def epoch(ts):
-    try:
-        return datetime.datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
-    except (AttributeError, ValueError):
-        return None
-
-
-OUTPUT_RE = re.compile(r"Output is being written to: (\S+)")
-TASK_STATUS = {"completed": "done", "failed": "error", "killed": "stopped", "stopped": "stopped"}
-AGENT_MARKERS = (b'"name":"Agent"', b'"name":"Task"', b'"agentId"', b"<task-notification>", b'"run_in_background":true', b'"backgroundTaskId"')
+AGENT_MARKERS = (b'"name":"Agent"', b'"name":"Task"', b'"name":"SendMessage"', b'"agentId"', b'"resumedAgentId"', b"<task-notification>",
+                 b'"run_in_background":true', b'"backgroundTaskId"')
 
 
 def first_text(content):
@@ -720,8 +736,14 @@ def output_tail(path, n=15):
     return "\n".join(lines[-n:])
 
 
-def scan_agents(lines, nested):
-    agents, order, runs, keys = {}, [], {}, []
+# The shared reducer over one transcript; Agent prompts are kept for matching inline threads.
+def track(path, nested, parent=None):
+    t, prompts, keys = tracker.Tracker(parent=parent), {}, ()
+    try:
+        with open(path, "rb") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return t, prompts, []
     for line in lines:
         if not any(m in line for m in AGENT_MARKERS) and not (b'"tool_result"' in line and any(k in line for k in keys)):
             continue
@@ -731,73 +753,13 @@ def scan_agents(lines, nested):
             continue
         if e.get("isSidechain") and not nested:
             continue
-        ts = e.get("timestamp")
-        note = None
-        if e.get("type") == "queue-operation" and e.get("operation") == "enqueue":
-            note = e.get("content")
-        elif e.get("type") == "attachment":
-            note = (e.get("attachment") or {}).get("prompt")
+        if t.feed(e):
+            keys = [('"%s"' % i).encode() for i in t.rows]
         content = (e.get("message") or {}).get("content")
-        if isinstance(content, str):
-            note = content
-            content = None
-        if isinstance(note, str) and "<task-notification>" in note:
-            m = TASK_ID_RE.search(note)
-            a = agents.get(m.group(1)) if m else None
-            if a is None:
-                # A run resumed by SendMessage notifies with the SendMessage tool_use id; match by agent id.
-                m = TASK_AGENT_RE.search(note)
-                a = next((x for x in agents.values() if m and x["agentId"] == m.group(1)), None)
-            if a is not None:
-                st = STATUS_RE.search(note)
-                d = DURATION_RE.search(note)
-                a["status"] = TASK_STATUS.get(st.group(1) if st else "", "done")
-                # The same notification is logged up to four times; the first copy carries the finish time.
-                run = d.group(1) if d else note
-                if runs.get(a["id"]) != run:
-                    runs[a["id"]] = run
-                    a["endTs"] = ts
-                if d:
-                    a["ms"] = int(d.group(1))
-            continue
-        if not isinstance(content, list):
-            continue
-        for b in content:
-            inp = b.get("input") or {}
+        for b in content if isinstance(content, list) else []:
             if b.get("type") == "tool_use" and b.get("name") in ("Agent", "Task"):
-                agents[b.get("id")] = {
-                    "id": b.get("id"), "kind": "agent", "description": inp.get("description") or "", "type": inp.get("subagent_type") or "general-purpose",
-                    "background": inp.get("run_in_background") in (True, "true"), "startTs": ts, "endTs": None, "status": "running", "agentId": None,
-                    "prompt": (inp.get("prompt") or "").strip(),
-                }
-                order.append(b.get("id"))
-                keys.append(('"%s"' % b.get("id")).encode())
-            elif b.get("type") == "tool_use" and b.get("name") == "Bash" and inp.get("run_in_background") in (True, "true"):
-                cmd = str(inp.get("command") or "")
-                agents[b.get("id")] = {
-                    "id": b.get("id"), "kind": "bash", "description": inp.get("description") or cmd.strip().split("\n")[0][:120], "type": "bash",
-                    "command": clip(cmd, 2000), "background": True, "startTs": ts, "endTs": None, "status": "running", "agentId": None,
-                }
-                order.append(b.get("id"))
-                keys.append(('"%s"' % b.get("id")).encode())
-            elif b.get("type") == "tool_result" and b.get("tool_use_id") in agents:
-                a = agents[b["tool_use_id"]]
-                r = e.get("toolUseResult") if isinstance(e.get("toolUseResult"), dict) else {}
-                if a["kind"] == "bash":
-                    m = OUTPUT_RE.search(text_of(b.get("content")))
-                    a["output"] = m.group(1) if m else None
-                    if b.get("is_error") or not r.get("backgroundTaskId"):
-                        a["status"], a["endTs"] = "error" if b.get("is_error") else "done", ts
-                    continue
-                a["agentId"] = r.get("agentId") or a["agentId"]
-                if r.get("status") == "async_launched":
-                    a["background"] = True
-                elif a["status"] == "running":
-                    a["status"] = "error" if b.get("is_error") else "done"
-                    a["endTs"] = ts
-                    if r.get("totalDurationMs"):
-                        a["ms"] = r["totalDurationMs"]
-    return agents, order
+                prompts[b.get("id")] = ((b.get("input") or {}).get("prompt") or "").strip()
+    return t, prompts, lines
 
 
 def agent_ids(sub):
@@ -811,58 +773,60 @@ def agent_ids(sub):
     return ids
 
 
-# Tree order: each agent is followed by what it spawned (nested subagents, background commands).
-def collect_agents(path, sub, ids, nested, alive_main, parent, depth, out):
-    try:
-        with open(path, "rb") as fh:
-            lines = fh.read().splitlines()
-    except OSError:
-        return
-    agents, order = scan_agents(lines, nested)
+# What only the files know: the subagent transcript and its last activity, a background command's output tail.
+def enrich(a, sub, ids):
+    if a["kind"] == "agent" and not a.get("agentId"):
+        a["agentId"] = ids.get(a["id"])
+    f = os.path.join(sub, "agent-%s.jsonl" % a["agentId"]) if a.get("agentId") else None
+    if f and os.path.exists(f):
+        a.update(agent_activity(f))
+        a["file"] = f
+    if a["kind"] == "bash" and a.get("output"):
+        a["tail"] = output_tail(a["output"])
+        a["last"] = (a["tail"] or "").split("\n")[-1][:160] or None
+    return a
+
+
+# Each agent is followed by what it spawned (rows of its own transcript); daemon rows replace the scanned ones.
+def collect(path, sub, ids, nested, parent, depth, drows, out):
+    t, prompts, lines = track(path, nested, parent)
     threads = None
-    for tid in order:
-        a = agents[tid]
-        a["depth"], a["parent"] = depth, parent
-        if a["kind"] == "agent" and a["agentId"] is None:
-            a["agentId"] = ids.get(tid)
-        f = os.path.join(sub, "agent-%s.jsonl" % a["agentId"]) if a["agentId"] else None
-        if f and os.path.exists(f):
-            a.update(agent_activity(f))
-            a["file"] = f
-            end, last = epoch(a["endTs"]), epoch(a["lastTs"])
-            if a["status"] != "running" and end and last and last > end + 10:
-                a["status"], a["endTs"] = "running", None
-        elif a["kind"] == "agent" and not nested and a["prompt"]:
+    for a in t.list():
+        a = enrich(dict(drows.pop(a["id"], None) or a), sub, ids)
+        if a.get("file") is None and a["kind"] == "agent" and not nested and prompts.get(a["id"]):
             if threads is None:
                 threads = inline_threads(lines)
-            root = next((r for r, t in threads.items() if t["prompt"] == a["prompt"]), None)
+            root = next((r for r, th in threads.items() if th["prompt"] == prompts[a["id"]]), None)
             if root is not None:
                 a["inline"] = path + "#" + root
                 a["last"], a["lastTs"] = threads[root]["last"], threads[root]["lastTs"]
-        if a["kind"] == "bash" and a.get("output"):
-            a["tail"] = output_tail(a["output"])
-            a["last"] = (a["tail"] or "").split("\n")[-1][:160] or None
-        if a["status"] == "running" and not alive_main:
-            a["status"], a["endTs"] = "stopped", a.get("lastTs")
-        a.pop("prompt", None)
         out.append(a)
         if a.get("file") and depth < 4:
-            collect_agents(a["file"], sub, ids, True, alive_main, a["id"], depth + 1, out)
+            collect(a["file"], sub, ids, True, a["id"], depth + 1, drows, out)
 
 
-def session_agents(path, alive_main):
-    sub = path[:-6] + "/subagents"
+def session_rows(path, daemon=None):
+    nested = os.path.basename(os.path.dirname(path)) == "subagents"
+    main = os.path.dirname(os.path.dirname(path)) + ".jsonl" if nested else path
+    sub = main[:-6] + "/subagents"
+    ids = agent_ids(sub)
+    st = chat_state(daemon_state_path(daemon))
+    drows = {r["id"]: r for r in st["agents"]} if st else {}
     out = []
-    collect_agents(path, sub, agent_ids(sub), False, alive_main, None, 0, out)
-    return out
+    collect(path, sub, ids, nested, None, 0, drows, out)
+    if st:
+        if not nested:
+            out += [enrich(dict(a), sub, ids) for a in drows.values()]
+        return tracker.settle(out, True, (st.get("startedAt") or 0) / 1000.0)
+    sid = os.path.basename(main)[:-6]
+    live = next((s for s in live_sessions(None) if s["sessionId"] == sid), None)
+    since = live["startedAt"] / 1000.0 if live and isinstance(live.get("startedAt"), (int, float)) else None
+    return tracker.settle(out, live is not None, since)
 
 
 def op_agents(req):
     path = req.get("file")
-    if not path or not os.path.exists(path):
-        return {"agents": []}
-    sid = os.path.basename(path)[:-6]
-    return {"agents": session_agents(path, any(s["sessionId"] == sid for s in live_sessions(None)))}
+    return {"agents": session_rows(path, req.get("daemon")) if path and os.path.exists(path) else []}
 
 
 def frontmatter(path):
@@ -1192,9 +1156,20 @@ def op_review_sources(req):
             p = l.split("\t", 3)
             if len(p) == 4:
                 out["commits"].append({"sha": p[0], "short": p[1], "ts": int(p[2]) * 1000, "subject": p[3][:160]})
+        out["base"] = base_branch(req.get("cwd") or ".")
     except Exception:
         pass
     return out
+
+
+# The branch this one was forked from: the first of master/main (local, then origin) that is not the current branch.
+def base_branch(cwd):
+    head = git(cwd, ["symbolic-ref", "--short", "-q", "HEAD"], timeout=5).stdout.strip()
+    for ref in ("master", "main", "origin/master", "origin/main"):
+        if ref == head or git(cwd, ["rev-parse", "--verify", "-q", ref + "^{commit}"], timeout=5).returncode != 0:
+            continue
+        return ref
+    return None
 
 
 def op_diff(req):
@@ -1229,6 +1204,13 @@ def op_diff(req):
         parse_diff(r.stdout, files, budget)
         return {"root": root, "files": files, "truncated": budget[0] <= 0}
     base = "HEAD" if git(root, ["rev-parse", "--verify", "-q", "HEAD"]).returncode == 0 else EMPTY_TREE
+    if req.get("base"):
+        if not REV_RE.fullmatch(req["base"]):
+            return {"error": "Not a branch: " + req["base"]}
+        r = git(root, ["merge-base", req["base"], "HEAD"])
+        if r.returncode != 0:
+            return {"error": (r.stderr or "No common ancestor with " + req["base"]).strip()}
+        base = r.stdout.strip()
     r = git(root, ["diff", "--no-color", "--no-ext-diff", "-M", base])
     if r.returncode != 0:
         return {"error": (r.stderr or "git diff failed").strip()}
@@ -1365,6 +1347,10 @@ def resolve_from_transcript(transcript, rel):
         cand = os.path.join(base, rel)
         if os.path.isfile(cand):
             return cand
+        # Claude often names a class without its extension (`common/Foo` for common/Foo.java).
+        files = [f for f in glob.glob(glob.escape(cand) + ".*") if os.path.isfile(f)]
+        if len(files) == 1:
+            return files[0]
     return None
 
 
@@ -1443,7 +1429,7 @@ def op_open_file(req):
     if target.startswith("file://"):
         target = target[len("file://"):]
     m = POS_RE.match(target)
-    path, line = m.group(1), m.group(2)
+    path, line = os.path.expanduser(m.group(1)), m.group(2)
     if not os.path.isabs(path):
         rel = path
         path = os.path.join(req.get("cwd") or HOME, rel)
@@ -1461,6 +1447,23 @@ def op_open_file(req):
     else:
         raise SystemExit("Opening files needs the open-file bridge (see docs/INSTALL.md). Use Copy path instead.")
     return {"ok": True, "path": path}
+
+
+URL_RE = re.compile(r"^https?://[^\s\x00-\x1f\x7f]+$", re.I)
+
+
+def op_open_url(req):
+    url = str(req.get("url") or "").strip()
+    if not URL_RE.match(url):
+        raise SystemExit("only http(s) links can be opened")
+    if sys.platform == "darwin":
+        subprocess.run(["open", url], check=True, timeout=15)
+        return {"ok": True}
+    bridge = load_config().get("openBridge")
+    if not (isinstance(bridge, dict) and bridge.get("dir") and bridge.get("root")):
+        raise SystemExit("Opening links on the Mac needs the open-file bridge (see docs/INSTALL.md)")
+    bridge_request(bridge, "url", url, None, "url")
+    return {"ok": True}
 
 
 FONTS_JS = """ObjC.import("AppKit");
@@ -1623,6 +1626,16 @@ def op_sessions(req):
     return {"sessions": out}
 
 
+def op_save_typography(req):
+    path = os.path.join(os.path.dirname(CONFIG), "typography.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump({"settings": req.get("settings") or {}, "vars": req.get("vars") or {}}, fh, ensure_ascii=False, indent=1)
+    os.replace(tmp, path)
+    return {"ok": True, "path": path}
+
+
 ERROR_LOG = os.path.join(STATE, "errors.log")
 
 
@@ -1633,10 +1646,87 @@ def op_log_error(req):
     return {"ok": True}
 
 
+CHANGELOG = os.path.join(CLAUDE, "cache", "changelog.md")
+
+
+# The CLI keeps the Claude Code changelog here (fetched in the background by the interactive CLI), newest first.
+def op_changelog(req):
+    try:
+        with open(CHANGELOG, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return {"path": CHANGELOG, "versions": [], "total": 0, "missing": True}
+    parts = re.split(r"^## +", text, flags=re.M)[1:]
+    skip = int(req.get("skip") or 0)
+    limit = int(req.get("limit") or 10)
+    versions = []
+    for p in parts[skip:skip + limit]:
+        head, _, body = p.partition("\n")
+        versions.append({"version": head.strip(), "text": body.strip()})
+    return {"path": CHANGELOG, "versions": versions, "total": len(parts), "mtime": int(os.path.getmtime(CHANGELOG) * 1000)}
+
+
+def install_type(path):
+    real = os.path.realpath(path)
+    if "/node_modules/" in real:
+        return "npm-global"
+    if real.startswith(os.path.join(HOME, ".local", "share", "claude")) or real.startswith(os.path.join(HOME, ".claude", "local")):
+        return "native"
+    if real.startswith("/opt/homebrew") or "/Cellar/" in real or "/linuxbrew/" in real:
+        return "homebrew"
+    return "other"
+
+
+def settings_check(path):
+    if not os.path.isfile(path):
+        return {"path": path, "exists": False}
+    try:
+        with open(path) as fh:
+            json.load(fh)
+        return {"path": path, "exists": True, "ok": True}
+    except (OSError, ValueError) as e:
+        return {"path": path, "exists": True, "ok": False, "error": str(e)}
+
+
+# /doctor: which claude binary the daemon would start (same order as server config.claude_bin), other installs on
+# PATH, and whether the settings files parse.
+def op_doctor(req):
+    cwd = req.get("cwd") or HOME
+    try:
+        with open(CONFIG) as fh:
+            configured = (json.load(fh) or {}).get("claudeBin")
+    except (OSError, ValueError):
+        configured = None
+    chosen = None
+    for cand in [configured, shutil.which("claude"), os.path.join(HOME, ".local", "bin", "claude")]:
+        if cand and os.path.isfile(cand) and os.access(cand, os.X_OK):
+            chosen = cand
+            break
+    seen = set()
+    installs = []
+    for d in (os.environ.get("PATH") or "").split(os.pathsep) + [os.path.join(HOME, ".local", "bin")]:
+        p = os.path.join(d, "claude")
+        if d and os.path.isfile(p) and os.access(p, os.X_OK) and os.path.realpath(p) not in seen:
+            seen.add(os.path.realpath(p))
+            installs.append({"path": p, "real": os.path.realpath(p), "type": install_type(p)})
+    files = [os.path.join(CLAUDE, "settings.json"), os.path.join(CLAUDE, "settings.local.json"), os.path.join(cwd, ".claude", "settings.json"),
+             os.path.join(cwd, ".claude", "settings.local.json"), os.path.join(HOME, ".claude.json"),
+             "/Library/Application Support/ClaudeCode/managed-settings.json" if sys.platform == "darwin" else "/etc/claude-code/managed-settings.json"]
+    return {"binary": chosen, "real": os.path.realpath(chosen) if chosen else None, "type": install_type(chosen) if chosen else None,
+            "configured": configured, "installs": installs, "settings": [settings_check(f) for f in files],
+            "changelog": os.path.isfile(CHANGELOG)}
+
+
+def op_resolve_dir(req):
+    p = os.path.expanduser(str(req.get("path") or "").strip())
+    p = os.path.abspath(os.path.join(req.get("cwd") or HOME, p))
+    return {"path": p, "isDir": os.path.isdir(p)}
+
+
 req = json.load(sys.stdin)
 # the V2 page names transcripts as ~/.claude/projects/…; every op taking `file` gets the real path
 for key in ("file", "agentFile"):
     if isinstance(req.get(key), str) and req[key].startswith("~/"):
         req[key] = os.path.expanduser(req[key])
-ops = {"logError": op_log_error, "bind": op_bind, "poll": op_poll, "wait": op_wait, "older": op_older, "meta": op_meta, "files": op_files, "writeImage": op_write_image, "writeExport": op_write_export, "image": op_image, "openFile": op_open_file, "fonts": op_fonts, "stats": op_stats, "agents": op_agents, "diff": op_diff, "sessions": op_sessions, "reviewSources": op_review_sources, "fileText": op_file_text, "branch": op_branch}
+ops = {"logError": op_log_error, "bind": op_bind, "poll": op_poll, "wait": op_wait, "older": op_older, "meta": op_meta, "files": op_files, "writeImage": op_write_image, "writeExport": op_write_export, "image": op_image, "openFile": op_open_file, "openUrl": op_open_url, "fonts": op_fonts, "stats": op_stats, "agents": op_agents, "diff": op_diff, "sessions": op_sessions, "reviewSources": op_review_sources, "fileText": op_file_text, "branch": op_branch, "saveTypography": op_save_typography, "changelog": op_changelog, "doctor": op_doctor, "resolveDir": op_resolve_dir}
 print(json.dumps(ops[req.get("op", "poll")](req), ensure_ascii=False))

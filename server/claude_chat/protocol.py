@@ -7,9 +7,12 @@ EFFORT_CMD_RE = re.compile(r"^/effort\s+(\S+)")
 RENAME_CMD_RE = re.compile(r"^/rename\s+(.+?)\s*$")
 # inbox control subtypes that the CLI spells differently
 CONTROL_ALIASES = {"supported_models": "list_models"}
+# user-only skills (disable-model-invocation) are run by reading their SKILL.md
+SKILL_FILE_RE = re.compile(r"/skills/(?:[^/]+/)?([^/]+)/SKILL\.md$")
 
 
-def build_argv(claude_bin, session_id, resume=False, fork=False, model=None, effort=None, permission_mode=None, partial=True, extra=None):
+def build_argv(claude_bin, session_id, resume=False, fork=False, model=None, effort=None, permission_mode=None, partial=True, extra=None,
+               plugin_dirs=None, add_dirs=None, system_prompt_file=None):
     argv = [claude_bin, "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
             "--permission-prompt-tool", "stdio"]
     if partial:
@@ -26,6 +29,12 @@ def build_argv(claude_bin, session_id, resume=False, fork=False, model=None, eff
             argv.append("--fork-session")
     else:
         argv += ["--session-id", session_id]
+    for d in plugin_dirs or []:
+        argv += ["--plugin-dir", d]
+    for d in add_dirs or []:
+        argv += ["--add-dir", d]
+    if system_prompt_file:
+        argv += ["--append-system-prompt-file", system_prompt_file]
     return argv + list(extra or [])
 
 
@@ -130,15 +139,6 @@ def apply_event(state, ev, now=0):
                 up["activity"] = ev["status"]
         elif st == "session_title_changed" and ev.get("title"):
             up["title"] = ev["title"]
-        elif st in ("task_started", "task_updated", "task_notification") and ev.get("task_id"):
-            if st == "task_started":
-                status = "running"
-            elif st == "task_updated":
-                status = (ev.get("patch") or {}).get("status")
-            else:
-                status = ev.get("status") or "completed"
-            if status:
-                up["tasks"] = dict(state.get("tasks") or {}, **{ev["task_id"]: status})
     elif t == "assistant":
         msg = ev.get("message") or {}
         if msg.get("model") and msg["model"] != "<synthetic>":
@@ -147,6 +147,11 @@ def apply_event(state, ev, now=0):
             m = EFFORT_RE.search(text_of(msg))
             if m:
                 up["effort"] = m.group(1)
+        for b in msg.get("content") or []:
+            if isinstance(b, dict) and b.get("type") == "tool_use" and ev.get("parent_tool_use_id") is None:
+                skill = skill_of(b.get("name"), b.get("input") or {})
+                if skill:
+                    up["lastSkill"] = skill
     elif t == "result":
         if ev.get("total_cost_usd") is not None:
             up["cost"] = ev["total_cost_usd"]
@@ -226,9 +231,13 @@ def apply_prompt(state, inbox_id, text, now=0, uuid=None):
     return up
 
 
-# tasks of an ended CLI process cannot finish any more
-def stopped_tasks(state):
-    return {k: "stopped" if v == "running" else v for k, v in (state.get("tasks") or {}).items()}
+def skill_of(tool, inp):
+    if tool == "Skill" and isinstance(inp.get("skill"), str):
+        return inp["skill"].split(":")[-1]
+    if tool == "Read" and isinstance(inp.get("file_path"), str):
+        m = SKILL_FILE_RE.search(inp["file_path"])
+        return m.group(1) if m else None
+    return None
 
 
 def status_of(state):

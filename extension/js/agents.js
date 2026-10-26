@@ -1,166 +1,28 @@
 window.CC = window.CC || {};
 
-// Right sidebar: subagents (with the ones they spawned) and background commands. Rows come from the store (Agent /
-// Task / background Bash tools, their results and the system/task_* events); the V1 reader op `agents` (transcript
-// scan) fills what the store cannot know: nested agents of a subagent transcript, output tails, inline threads.
-// A click opens a subagent's transcript in its own chat tab, or shows the last output lines of a background command.
+// Right sidebar: subagents (with the ones they spawned) and background commands, as rows of the reader op `agents`
+// (server/claude_chat/agent_tracker.py: the daemon's rows in chat mode, the transcript in terminal mode). Store items
+// that can change a row trigger a poll; a slower timer covers the rest. A click opens a subagent's transcript in its
+// own chat tab, or shows the last output lines of a background command.
 CC.Agents = (function () {
   const util = CC.util;
   const el = util.el;
   const OPEN_MS = 5000;
   const CLOSED_MS = 30000;
   const CLOSED_RUNNING_MS = 10000;
-  const TASK_STATUS = { completed: "done", failed: "error", killed: "stopped", stopped: "stopped", running: "running" };
+  const KICK_MS = 300;
+  const AGENT_TOOLS = { Agent: true, Task: true, SendMessage: true, TaskStop: true, KillShell: true };
 
-  function flag(v) {
-    return v === true || v === "true";
-  }
-
-  function activity(it) {
-    if (it.k === "text") {
-      return it.text.trim().split("\n")[0].slice(0, 160);
+  // Store items after which the rows may differ: agent / background command tools, their results, task notices.
+  function touches(store, it) {
+    if (it.k === "tool") {
+      return AGENT_TOOLS[it.name] === true || (it.name === "Bash" && it.input != null && (it.input.run_in_background === true || it.input.run_in_background === "true"));
     }
-    if (it.k !== "tool") {
-      return null;
+    if (it.k === "result") {
+      const tool = store.tool(it.tid);
+      return tool != null && touches(store, tool);
     }
-    const inp = it.input || {};
-    const keys = ["description", "file_path", "pattern", "command", "url", "query", "skill", "message"];
-    for (const k of keys) {
-      let v = inp[k];
-      if (typeof v === "string" && v.trim()) {
-        v = v.trim().split("\n")[0];
-        if (k === "file_path") {
-          v = v.split("/").pop();
-        }
-        return (it.name || "tool") + " · " + v.slice(0, 140);
-      }
-    }
-    return it.name || "tool";
-  }
-
-  // Rows from the store: one per Agent / Task tool and per background Bash, status from the result and the task events.
-  function fromStore(store, file, live) {
-    const rows = [];
-    const byId = new Map();
-    store.items.forEach(function (it) {
-      if (it.k !== "tool") {
-        return;
-      }
-      const input = it.input || {};
-      const r = store.resultOf(it.id);
-      const ex = r != null ? r.extra || {} : {};
-      let a = null;
-      if (it.name === "Agent" || it.name === "Task") {
-        a = { id: it.id, kind: "agent", description: input.description || "", type: input.subagent_type || "general-purpose", background: flag(input.run_in_background),
-          startTs: it.ts, endTs: null, status: "running", agentId: null, parent: it.agent || null, ms: null, last: null, lastTs: null };
-        if (r != null) {
-          a.agentId = ex.agentId || null;
-          if (ex.status === "async_launched") {
-            a.background = true;
-          } else {
-            a.status = r.err ? "error" : "done";
-            a.endTs = r.ts || null;
-            a.ms = ex.totalDurationMs || null;
-          }
-        }
-        const t = store.tasks.get(it.id);
-        if (t != null) {
-          a.agentId = a.agentId || t.taskId || null;
-          if (t.backgrounded) {
-            a.background = true;
-          }
-          if (a.status === "running" && t.status && t.status !== "running") {
-            a.status = TASK_STATUS[t.status] || "done";
-            a.endTs = t.endedAt || null;
-          }
-          if (t.ms) {
-            a.ms = t.ms;
-          }
-          if (t.summary) {
-            a.last = t.summary.split("\n")[0].slice(0, 160);
-            a.lastTs = t.endedAt || null;
-          }
-        }
-      } else if (it.name === "Bash" && flag(input.run_in_background)) {
-        const cmd = String(input.command || "");
-        a = { id: it.id, kind: "bash", description: input.description || cmd.trim().split("\n")[0].slice(0, 120), type: "bash", command: cmd.slice(0, 2000),
-          background: true, startTs: it.ts, endTs: null, status: "running", parent: it.agent || null, ms: null, last: null, lastTs: null };
-        if (r != null && (r.err || !ex.background)) {
-          a.status = r.err ? "error" : "done";
-          a.endTs = r.ts || null;
-        }
-        const t = store.tasks.get(it.id);
-        if (t != null && a.status === "running" && t.status && t.status !== "running") {
-          a.status = TASK_STATUS[t.status] || "done";
-          a.endTs = t.endedAt || null;
-        }
-      }
-      if (a != null) {
-        rows.push(a);
-        byId.set(a.id, a);
-      }
-    });
-    store.items.forEach(function (it) {
-      const a = it.agent != null ? byId.get(it.agent) : null;
-      if (a == null) {
-        return;
-      }
-      const act = activity(it);
-      if (act) {
-        a.last = act;
-        a.lastTs = it.ts || null;
-      }
-    });
-    const base = file != null ? file.replace(/\.jsonl$/, "") + "/subagents/" : null;
-    rows.forEach(function (a) {
-      let depth = 0;
-      let p = a.parent;
-      while (p != null && byId.has(p) && depth < 4) {
-        depth += 1;
-        p = byId.get(p).parent;
-      }
-      a.depth = depth;
-      if (a.parent != null && !byId.has(a.parent)) {
-        a.parent = null;
-      }
-      if (a.kind === "agent" && a.agentId && base != null) {
-        a.file = base + "agent-" + a.agentId + ".jsonl";
-      }
-      if (a.status === "running" && !live) {
-        a.status = "stopped";
-        a.endTs = a.lastTs;
-      }
-    });
-    return rows;
-  }
-
-  // Reader rows add what the store lacks (nested subagents, bash output tails, inline threads); store rows win.
-  function merge(storeRows, readerRows) {
-    const byId = new Map();
-    storeRows.forEach(function (a) {
-      byId.set(a.id, a);
-    });
-    const out = storeRows.slice();
-    (readerRows || []).forEach(function (r) {
-      const a = byId.get(r.id);
-      if (a == null) {
-        out.push(r);
-        return;
-      }
-      ["tail", "inline", "output"].forEach(function (k) {
-        if (r[k] != null) {
-          a[k] = r[k];
-        }
-      });
-      if (a.file == null && r.file != null) {
-        a.file = r.file;
-      }
-      if (r.last != null && (a.last == null || a.kind === "bash")) {
-        a.last = r.last;
-        a.lastTs = r.lastTs || a.lastTs;
-      }
-    });
-    return out;
+    return it.k === "notice" && (it.level === "task" || it.level === "handback");
   }
 
   function Agents(aside, toggleBtn, deps) {
@@ -172,9 +34,12 @@ CC.Agents = (function () {
     this.running = 0;
     this.timer = null;
     this.busy = false;
-    this.readerRows = [];
+    this.again = false;
+    this.due = 0;
+    this.forced = false;
+    this.status = null;
+    this.rows = [];
     this.agentRows = new Map();
-    this.frame = 0;
     this.badge = el("span", "hdr-badge hidden");
     toggleBtn.appendChild(this.badge);
 
@@ -195,17 +60,32 @@ CC.Agents = (function () {
     CC.host.storageGet("agents:open:" + CC.host.viewId()).then(function (v) {
       self.setOpen(v === true, false);
     });
-    ["items:add", "items:prepend", "items:update", "tasks", "reset", "state"].forEach(function (name) {
-      self.store.on(name, function () {
-        self.refresh();
-      });
+    this.store.on("items:add", function (items) {
+      if (items.some(function (it) {
+        return touches(self.store, it);
+      })) {
+        self.soon();
+      }
+    });
+    this.store.on("items:update", function (u) {
+      if (touches(self.store, u.item)) {
+        self.soon();
+      }
+    });
+    this.store.on("reset", function () {
+      self.soon();
+    });
+    this.store.on("state", function () {
+      if (self.store.status !== self.status) {
+        self.status = self.store.status;
+        self.soon();
+      }
     });
     setInterval(function () {
       if (self.isOpen()) {
         self.tick();
       }
     }, 1000);
-    this.render();
   }
 
   Agents.prototype.isOpen = function () {
@@ -226,48 +106,53 @@ CC.Agents = (function () {
       return;
     }
     this.file = file || null;
-    this.readerRows = [];
-    this.kick(0);
+    this.rows = [];
+    this.renderAgents(this.rows);
+    this.kick(0, true);
   };
 
-  // Store changes come in bursts while streaming; one render per animation frame is enough.
-  Agents.prototype.refresh = function () {
-    const self = this;
-    if (this.frame !== 0) {
-      return;
-    }
-    const paint = function () {
-      self.frame = 0;
-      self.render();
-    };
-    this.frame = typeof requestAnimationFrame === "function" ? requestAnimationFrame(paint) : setTimeout(paint, 16);
-  };
-
-  Agents.prototype.kick = function (delay) {
+  // forced: poll even while the sidebar is closed and nothing runs (the badge and the header count need the rows)
+  Agents.prototype.kick = function (delay, forced) {
     const self = this;
     clearTimeout(this.timer);
+    this.due = Date.now() + delay;
+    this.forced = forced === true;
     this.timer = setTimeout(function () {
-      self.poll();
+      self.poll(forced === true);
     }, delay);
   };
 
-  Agents.prototype.poll = async function () {
+  // Debounced poll after store changes; a burst (streamed tool input) does not keep pushing it back.
+  Agents.prototype.soon = function () {
+    if (this.busy) {
+      this.again = true;
+    } else if (!this.forced || this.due - Date.now() > KICK_MS) {
+      this.kick(KICK_MS, true);
+    }
+  };
+
+  Agents.prototype.poll = async function (forced) {
     if (this.busy) {
       return;
     }
     this.busy = true;
+    this.again = false;
     const open = this.isOpen();
     try {
-      if (this.file != null && (open || this.running > 0)) {
-        const res = await CC.host.reader("agents", { file: this.file });
-        this.readerRows = res.agents || [];
-        this.render();
+      if (this.file != null && (open || forced || this.running > 0)) {
+        const res = await CC.host.reader("agents", { file: this.file, daemon: this.deps.daemon() });
+        this.rows = res.agents || [];
+        this.renderAgents(this.rows);
       }
     } catch (e) {
       console.warn("agents poll failed", e && e.message);
     } finally {
       this.busy = false;
-      this.kick(open ? OPEN_MS : this.running > 0 ? CLOSED_RUNNING_MS : CLOSED_MS);
+      if (this.again) {
+        this.kick(KICK_MS, true);
+      } else {
+        this.kick(open ? OPEN_MS : this.running > 0 ? CLOSED_RUNNING_MS : CLOSED_MS);
+      }
     }
   };
 
@@ -299,31 +184,29 @@ CC.Agents = (function () {
     });
   };
 
-  // Newest first, each item followed by what it spawned.
+  // Newest first, each item followed by what it spawned ([row, depth] pairs).
   function treeOrder(list) {
+    const ids = new Set(list.map(function (a) {
+      return a.id;
+    }));
     const kids = new Map();
     list.forEach(function (a) {
-      const k = a.parent || "";
+      const k = ids.has(a.parent) ? a.parent : "";
       if (!kids.has(k)) {
         kids.set(k, []);
       }
       kids.get(k).push(a);
     });
     const out = [];
-    function walk(parent) {
+    function walk(parent, depth) {
       (kids.get(parent) || []).slice().reverse().forEach(function (a) {
-        out.push(a);
-        walk(a.id);
+        out.push([a, depth]);
+        walk(a.id, depth + 1);
       });
     }
-    walk("");
+    walk("", 0);
     return out;
   }
-
-  Agents.prototype.render = function () {
-    const live = this.store.status !== "stopped" && this.store.status !== "offline";
-    this.renderAgents(merge(fromStore(this.store, this.file, live), this.readerRows));
-  };
 
   Agents.prototype.renderAgents = function (list) {
     const self = this;
@@ -342,14 +225,15 @@ CC.Agents = (function () {
     this.count.textContent = list.length > 0 ? String(list.length) : "";
     this.agentEmpty.classList.toggle("hidden", list.length > 0);
     const ids = new Set();
-    treeOrder(list).forEach(function (a) {
+    treeOrder(list).forEach(function (pair) {
+      const a = pair[0];
       ids.add(a.id);
       let r = self.agentRows.get(a.id);
       if (r == null) {
         r = self.agentRow(a);
         self.agentRows.set(a.id, r);
       }
-      self.updateAgentRow(r, a);
+      self.updateAgentRow(r, a, pair[1]);
       place(self.agentList, r.root, ids.size - 1);
     });
     this.agentRows.forEach(function (r, id) {
@@ -384,11 +268,11 @@ CC.Agents = (function () {
     return r;
   };
 
-  Agents.prototype.updateAgentRow = function (r, a) {
+  Agents.prototype.updateAgentRow = function (r, a, depth) {
     r.data = a;
     const bash = a.kind === "bash";
-    r.root.className = "ag-item st-" + a.status + " kind-" + (a.kind || "agent") + (r.root.classList.contains("expanded") ? " expanded" : "") + (a.depth > 0 ? " nested" : "");
-    r.root.style.setProperty("--depth", a.depth || 0);
+    r.root.className = "ag-item st-" + a.status + " kind-" + (a.kind || "agent") + (r.root.classList.contains("expanded") ? " expanded" : "") + (depth > 0 ? " nested" : "");
+    r.root.style.setProperty("--depth", depth);
     r.root.title = bash ? a.command || "" : a.file != null || a.inline != null ? "Open in a chat tab" : "No transcript for this agent yet";
     r.dot.replaceWith(r.dot = bash ? util.icon("terminal") : dot(a.status));
     r.dot.classList.add("ag-dot", "st-" + a.status);
@@ -397,7 +281,7 @@ CC.Agents = (function () {
     const states = { running: "running", done: "done", error: "failed", stopped: "stopped" };
     r.sub.textContent = "";
     r.sub.appendChild(el("span", "ag-state", states[a.status] || a.status));
-    r.sub.appendChild(document.createTextNode(" · " + (bash ? "background command" : a.type + (a.background ? " · in background" : "")) + (a.depth > 0 && !bash ? " · nested" : "")));
+    r.sub.appendChild(document.createTextNode(" · " + (bash ? "background command" : a.type + (a.background ? " · in background" : "")) + (depth > 0 && !bash ? " · nested" : "")));
     r.last.textContent = a.last || "";
     r.last.title = a.last || "";
     r.last.classList.toggle("hidden", !a.last);
@@ -447,6 +331,5 @@ CC.Agents = (function () {
     }
   }
 
-  Agents.fromStore = fromStore;
   return Agents;
 })();

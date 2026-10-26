@@ -15,21 +15,24 @@ CC.BUILTIN_COMMANDS = [
   ["memory", "Edit memory files", "", true],
   ["review", "Review a pull request", "[pr]"],
   ["security-review", "Security review of pending changes"],
-  ["add-dir", "Add a working directory", "<path>"],
+  ["add-dir", "Add a working directory (restarts Claude)", "[path]", true],
   ["agents", "Manage subagents", "", true],
   ["mcp", "Manage MCP servers", "", true],
   ["hooks", "Manage hooks", "", true],
   ["permissions", "View or update permission rules", "", true],
+  ["allowed-tools", "View permission rules (alias of /permissions)", "", true],
   ["config", "Open settings", "", true],
   ["plugin", "Manage plugins", "", true],
+  ["plugins", "Manage plugins (alias of /plugin)", "", true],
   ["output-style", "Set the output style", "[style]", true],
-  ["todos", "Show the current todo list"],
-  ["bashes", "List background tasks", "", true],
+  ["todos", "Show the current task list", "", true],
+  ["tasks", "View and stop background tasks", "", true],
+  ["bashes", "View and stop background tasks", "", true],
   ["export", "Export the conversation", "[file]", true],
-  ["plan", "Enter plan mode", "[prompt]"],
-  ["fast", "Toggle fast mode"],
+  ["plan", "Enter plan mode or view the plan", "[open|prompt]"],
+  ["fast", "Toggle fast mode", "[on|off]", true],
   ["ide", "Connect to an IDE", "", true],
-  ["doctor", "Diagnose the installation", "", true],
+  ["doctor", "Diagnose the installation and run the health check", "", true],
   ["release-notes", "Show release notes", "", true],
   ["help", "Show help", "", true],
   ["exit", "Stop Claude in this chat"],
@@ -42,7 +45,18 @@ CC.Composer.use(function (composer) {
   const owner = { name: "slash" };
   composer.commands = [];
 
-  const LOCAL = { resume: true, model: true, effort: true };
+  const PICKERS = { resume: true, model: true, effort: true };
+
+  // Answered in the chat (pickers, CC.Commands) rather than by the CLI.
+  function local(name) {
+    return PICKERS[name] === true || name === "exit" || name === "quit" || CC.Commands.has(name);
+  }
+
+  function builtins() {
+    return CC.BUILTIN_COMMANDS.map(function (c) {
+      return local(c.name) ? Object.assign({}, c, { dialog: false, local: true }) : c;
+    });
+  }
 
   // The CLI's initialize reply lists its commands (skills included); the static list is the fallback before it arrives.
   function all() {
@@ -51,17 +65,18 @@ CC.Composer.use(function (composer) {
       const names = {};
       const out = live.map(function (c) {
         names[c.name] = true;
-        return { name: c.name, desc: c.description || "", hint: c.argumentHint || "", picker: LOCAL[c.name] === true, source: "" };
+        return { name: c.name, desc: c.description || "", hint: c.argumentHint || "", picker: PICKERS[c.name] === true, local: local(c.name), source: "" };
       });
-      CC.BUILTIN_COMMANDS.forEach(function (c) {
-        if (names[c.name] !== true && (c.picker || c.name === "exit")) {
+      builtins().forEach(function (c) {
+        if (names[c.name] !== true && c.local) {
           out.push(c);
         }
       });
       return out;
     }
-    return CC.BUILTIN_COMMANDS.concat(composer.commands);
+    return builtins().concat(composer.commands);
   }
+  composer.slashCommands = all;
 
   function score(name, q) {
     if (q === "") {
@@ -116,7 +131,7 @@ CC.Composer.use(function (composer) {
         label: "/" + x.c.name,
         hint: x.c.hint,
         desc: x.c.desc,
-        badge: x.c.picker ? "picker" : x.c.source && x.c.source !== "built-in" ? x.c.source : "",
+        badge: x.c.picker ? "picker" : x.c.local ? "local" : x.c.source && x.c.source !== "built-in" ? x.c.source : "",
         cmd: x.c,
       };
     });
@@ -131,7 +146,7 @@ CC.Composer.use(function (composer) {
   owner.onPick = function (it, how) {
     const rest = composer.value().slice(composer.input.selectionStart).replace(/^\s+/, "");
     composer.setValue("/" + it.cmd.name + " " + rest);
-    if (how === "enter" && (!needsArg(it.cmd) || it.cmd.picker) && rest === "") {
+    if (how === "enter" && (!needsArg(it.cmd) || it.cmd.local) && rest === "") {
       composer.setValue("/" + it.cmd.name);
       composer.submit(false);
     }

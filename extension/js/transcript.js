@@ -65,7 +65,7 @@ CC.Transcript = (function () {
       return;
     }
     if (item.k === "notice") {
-      if (item.level === "task" || item.level === "interrupt") {
+      if (item.level === "task" || item.level === "handback" || item.level === "interrupt") {
         const body = this.ensureTurn(item);
         body.appendChild(v.notice(item));
         this.steps = null;
@@ -862,6 +862,9 @@ CC.Transcript = (function () {
       }
       return det;
     }
+    if (item.level === "handback") {
+      return this.handback(item);
+    }
     const n = el("div", "notice level-" + item.level + (item.status === "failed" ? " failed" : ""));
     if (item.level === "task") {
       n.appendChild(util.icon(item.status === "failed" ? "alert" : "bot"));
@@ -873,6 +876,40 @@ CC.Transcript = (function () {
       n.title = util.fmtTime(item.ts);
     }
     return n;
+  };
+
+  // A subagent's SubagentHandback report: a collapsed card like the Agent tool's.
+  Transcript.prototype.handback = function (item) {
+    const root = el("div", "tool tool-agent expandable");
+    const head = el("div", "tool-head");
+    const title = el("div", "tool-title");
+    title.append(el("span", "tool-verb", "Agent report"), el("span", "tool-target", item.text || this.agentTitle(item.agentId) || "Subagent"));
+    const chev = util.icon("chevron");
+    chev.classList.add("chev");
+    head.append(util.icon("bot"), title, chev);
+    if (item.ts) {
+      head.title = util.fmtTime(item.ts);
+    }
+    const body = el("div", "tool-body");
+    const report = el("div", "agent-result");
+    report.appendChild(CC.markdown.render(item.detail || ""));
+    body.appendChild(report);
+    root.append(head, body);
+    head.addEventListener("click", function () {
+      root.classList.toggle("open");
+    });
+    return root;
+  };
+
+  // Description of the Agent call whose result names this agent id (history items may lack it).
+  Transcript.prototype.agentTitle = function (agentId) {
+    for (const r of this.store.results.values()) {
+      if (r.extra != null && r.extra.agentId === agentId) {
+        const tool = this.store.tool(r.tid);
+        return tool != null && tool.input != null ? tool.input.description || null : null;
+      }
+    }
+    return null;
   };
 
   Transcript.prototype.addPending = function (entry) {

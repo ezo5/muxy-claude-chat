@@ -1,7 +1,8 @@
 window.CC = window.CC || {};
 
 // Composition: store + agent (daemon driver) or mirror (terminal mode) + transcript + composer plugins + sidebars.
-// Tab data: {cwd, sessionId?, newSession?, projectId?, directory?, model?, permissionMode?, file?(dev),
+// Tab data: {cwd, sessionId?, newSession?, prompt?, projectId?, directory?, model?, permissionMode?, file?(dev),
+//            pluginDirs?, addDirs?, appendSystemPromptFile? (CLI args of a new session, kept by the daemon for resumes),
 //            paneId?, paneTitle?, terminalTabId? (adopt a terminal), mode?: "terminal" (dev: mirror sessionId),
 //            agentFile?, agentTitle?, daemon? (read-only subagent transcript, the parent's daemon session id)}.
 (function () {
@@ -34,15 +35,15 @@ window.CC = window.CC || {};
   let renaming = false;
   const previews = {};
 
-  [["new-btn", "plus"], ["stop-btn", "power"], ["jump", "down"], ["pins-btn", "sidebar"], ["settings-btn", "gear"]].forEach(function (b) {
+  [["jump", "down"], ["pins-btn", "sidebar"], ["settings-btn", "gear"]].forEach(function (b) {
     $(b[0]).appendChild(util.icon(b[1]));
   });
 
-  const agentsBtn = toolbarButton("agents", "Agents");
-  const reviewBtn = toolbarButton("diff", "Review changes");
+  const agentsBtn = headerButton("agents", "Agents");
+  const reviewBtn = headerButton("diff", "Review changes");
 
-  function toolbarButton(iconName, title) {
-    const b = el("button", "tb-btn");
+  function headerButton(iconName, title) {
+    const b = el("button", "hdr-btn");
     b.type = "button";
     b.title = title;
     b.appendChild(util.icon(iconName));
@@ -200,6 +201,7 @@ window.CC = window.CC || {};
 
   const composer = new CC.Composer(footer, {
     store: store,
+    agents: agents,
     send: send,
     interrupt: function () {
       agent.interrupt().catch(function (e) {
@@ -228,17 +230,24 @@ window.CC = window.CC || {};
     sessionId: function () {
       return store.meta.cliSessionId || agent.sessionId;
     },
+    rewind: rewind,
+    openSettings: function () {
+      settings.open();
+    },
+    exportMarkdown: function () {
+      return exportMarkdown();
+    },
+    toTerminal: function () {
+      return switchMode(function () {
+        return modes.toTerminal();
+      });
+    },
   });
 
-  const wipeBtn = composer.button("trash", "Clear chat (keeps the conversation context)", function () {
-    transcript.wipe();
-  });
-  composer.left.append(reviewBtn, agentsBtn, wipeBtn);
+  document.querySelector(".hdr-actions").prepend(reviewBtn, agentsBtn);
 
-  // The footer is hidden in a subagent tab: agents go to the header, next to a way back to the chat that opened it.
   if (agentView) {
-    agentsBtn.className = "hdr-btn";
-    document.querySelector(".hdr-actions").prepend(agentsBtn);
+    reviewBtn.classList.add("hidden");
     const backBtn = el("button", "hdr-btn");
     backBtn.type = "button";
     backBtn.title = "Back to " + (data.parentTitle || "the parent chat");
@@ -340,7 +349,7 @@ window.CC = window.CC || {};
     },
   });
   CC.modes = modes;
-  new CC.Settings($("settings-btn"), modes, [{ label: "Export as Markdown", run: exportMarkdown }]);
+  const settings = new CC.Settings($("settings-btn"), modes, [{ label: "Export as Markdown", run: exportMarkdown }]);
 
   function switchMode(fn) {
     return fn().catch(function (e) {
@@ -367,11 +376,20 @@ window.CC = window.CC || {};
     }
   });
   document.addEventListener("keydown", function (e) {
-    if (e.ctrlKey && !e.metaKey && !e.altKey && e.key === "`") {
+    if (!e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) {
+      return;
+    }
+    if (e.key === "`") {
       e.preventDefault();
       switchMode(function () {
         return modes.toggle();
       });
+    } else if (e.code === "KeyC" && !agentView && composer.isWorking()) {
+      e.preventDefault();
+      composer.deps.interrupt();
+    } else if (e.code === "KeyK" && !agentView) {
+      e.preventDefault();
+      transcript.wipe();
     }
   });
 
@@ -438,7 +456,6 @@ window.CC = window.CC || {};
     statusEl.title = store.statusDetail || "";
     document.body.dataset.status = st;
     startBtn.classList.toggle("hidden", terminal || agentView || st !== "stopped");
-    $("stop-btn").classList.toggle("hidden", terminal || agentView || st === "stopped" || st === "connecting");
     transcript.setWorking(st === "busy", label);
     const icon = CC.theme.dotIcon(TAB_DOTS[running ? "busy" : st] || "muted");
     if (icon !== lastTabIcon) {
@@ -644,37 +661,6 @@ window.CC = window.CC || {};
     });
   });
 
-  $("stop-btn").addEventListener("click", async function () {
-    const choice = await muxy.dialog.confirm({
-      title: "Stop Claude in this chat?",
-      message: "The conversation stays and can be resumed with Start.",
-      buttons: ["Stop", "Cancel"],
-      default: "Cancel",
-      cancel: "Cancel",
-    });
-    if (choice === "Stop") {
-      agent.stop().catch(function (e) {
-        util.toast("Stop failed: " + e.message, "error");
-      });
-    }
-  });
-
-  $("new-btn").addEventListener("click", async function () {
-    try {
-      const projects = await muxy.projects.list();
-      const project = projects.find(function (p) {
-        return p.isActive;
-      }) || null;
-      const dir = project != null ? project.path : cwd;
-      await muxy.tabs.open({
-        kind: "extensionWebView",
-        extension: { id: "claude-chat", tabType: "chat", data: { newSession: true, cwd: dir, projectId: project != null ? project.id : null, directory: dir } },
-      });
-    } catch (e) {
-      util.toast("New chat failed: " + e.message, "error");
-    }
-  });
-
   if (muxy.events != null) {
     muxy.events.subscribe("extension.activity", function (e) {
       if (mirror == null && agent.sessionId != null && e.sid != null && String(e.sid) === String(agent.sessionId)) {
@@ -723,12 +709,29 @@ window.CC = window.CC || {};
       return;
     }
     const sid = data.sessionId != null ? data.sessionId : await CC.host.storageGet(SESSION_KEY);
-    if (sid == null && data.newSession === true && modes.settings.defaultMode === "terminal") {
+    const prompt = data.sessionId == null && typeof data.prompt === "string" && data.prompt.trim() !== "" ? data.prompt : null;
+    if (sid == null && prompt == null && data.newSession === true && modes.settings.defaultMode === "terminal") {
       await modes.toTerminal();
       return;
     }
-    const first = sid != null ? { sessionId: sid, resume: true } : { model: data.model, permissionMode: data.permissionMode };
+    const first = sid != null ? { sessionId: sid, resume: true } : { model: data.model, permissionMode: data.permissionMode,
+      pluginDirs: data.pluginDirs, addDirs: data.addDirs, appendSystemPromptFile: data.appendSystemPromptFile };
     await agent.start(first);
+    if (prompt != null) {
+      await sendInitialPrompt(prompt);
+    }
+  }
+
+  // Tab data survives muxy restarts, so the prompt from the opener (e.g. ticket-board) is guarded per tab.
+  async function sendInitialPrompt(prompt) {
+    const key = "promptSent:" + CC.host.viewId();
+    if (await CC.host.storageGet(key) != null) {
+      return;
+    }
+    await CC.host.storageSet(key, Date.now());
+    send({ id: util.uid(), text: prompt, images: [], previews: [], createdAt: Date.now() }).catch(function (e) {
+      util.toast("Initial prompt not sent: " + (e && e.message ? e.message : e), "error");
+    });
   }
 
   syncState();

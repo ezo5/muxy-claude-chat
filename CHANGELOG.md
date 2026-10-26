@@ -1,5 +1,41 @@
 # Changelog
 
+## Unreleased
+
+- Clicking an http(s) link offers Open in Muxy browser (a muxy browser tab), Open in default browser (the Mac's,
+  through the open-file bridge — rerun `host/install.sh`) and Copy link; Cmd+click still copies.
+- Local slash commands with native cards (`js/composer/commands.js` + one file per command in
+  `js/composer/commands/`): `/help` (all commands, filter, pick inserts), `/status` (version, model, effort,
+  permission mode, account, cwd, session, MCP servers), `/usage` (session cost, 5-hour and weekly limits as bars),
+  `/config` (Settings), `/export` (Markdown export), `/rewind` (pick a prompt → the rewind menu), `/ide` (switch to
+  terminal mode). They show as "local" in the `/` completion and stay there when the CLI's command list arrives.
+- `/resume <id>` / `/continue <id>` resume a session by full id or unique prefix.
+- More local commands: `/output-style [style]` (picker; writes the project's local settings like the terminal),
+  `/fast [on|off]` (state and why it is unavailable), `/tasks` / `/bashes` (background tasks: live output tail, stop),
+  `/doctor` (binary, installs, settings files, MCP, account, daemon; a button runs the CLI's `/doctor` skill),
+  `/release-notes` (the CLI's cached changelog, newest first), `/add-dir [path]` (restarts Claude with `--add-dir`,
+  resuming the conversation), `/plan [open|prompt]` (plan mode, then sends the prompt; shows the plan), `/todos`.
+- `/mcp` (servers with status, scope, tools, errors; reconnect, enable / disable, also as
+  `/mcp reconnect|enable|disable <server>|all`), `/plugin` (loaded plugins, Reload plugins / skills), `/agents`
+  (subagent definitions, open the agent file), `/hooks` (read-only listing by event), `/permissions` (allow / ask /
+  deny rules with source and the mode, open the settings file), `/memory` (instruction files and auto memories with
+  token counts, open in the editor) answered natively in the chat.
+- Subagents and background commands have one source of truth: `server/claude_chat/agent_tracker.py`, a reducer fed
+  by the daemon (stream-json, rows persisted in `state.json` `agents`) and by the reader (transcripts; `build.py`
+  inlines the module into `READER_SRC`). The agents sidebar, subagent tab status, the header's "· N agents" and the
+  ticket board (`list` → `{running, done}`) all read these rows; liveness (a dead CLI, or one started after the
+  row) is applied when rows are read, never stored. Replaces `state.json` `tasks` / `agentTasks`, the store's
+  `tasks`, `Agents.fromStore` / `merge` and the reader's resurrection heuristics. `/tasks` lists the background rows
+  (agents: task id = agent id, commands: `backgroundTaskId`); Monitor tasks are no longer listed.
+- An agent resumed with `SendMessage` shows as running again (task events and notifications by agent id).
+- An Agent call rejected or interrupted by the user shows as stopped, not failed.
+- The agents sidebar polls right after store changes that can move a row (agent / background command tools, their
+  results, task notices), with the timers as a fallback.
+- SubagentHandback reports (Claude Code 2.1.300) show in the chat as a collapsed "Agent report" card with the
+  agent's description and the report as markdown, from the stream (`task_notification.handback_report`) and from
+  transcripts (meta user message or queued command with `origin.handback`); the notice that only pointed at the
+  report is gone, and the Agent card no longer prints that pointer.
+
 ## 2.0.0 (2026-10-13)
 
 V2 replaces the terminal-scraping V1 with a managed agent per chat.

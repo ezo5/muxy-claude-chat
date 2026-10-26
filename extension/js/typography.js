@@ -3,7 +3,7 @@ window.CC = window.CC || {};
 // Chat typography stored in muxy.storage (shared by all chat tabs) and applied as CSS variables on :root.
 CC.typography = (function () {
   const KEY = "settings:typography";
-  const DEFAULTS = { font: "sans", customFont: "", size: 14.5, lineHeight: 1.6, codeFont: "mono", customCodeFont: "", codeSize: 12.5, width: "md" };
+  const DEFAULTS = { font: "sans", customFont: "", size: 14.5, lineHeight: 1.6, codeFont: "mono", customCodeFont: "", codeSize: 12.5, width: "md", renderMarkdown: true };
   const FONTS = [["sans", "System sans", "var(--sans)"], ["serif", "Serif", "var(--serif)"], ["mono", "Monospace", "var(--mono)"], ["custom", "Custom…", null]];
   const WIDTHS = [["md", "MD", "768px"], ["lg", "LG", "980px"], ["xl", "XL", "1240px"]];
   const CODE_FONTS = [["mono", "System monospace", null], ["custom", "Custom…", null]];
@@ -46,13 +46,31 @@ CC.typography = (function () {
     Object.assign(current, patch);
     apply();
     await CC.host.storageSet(KEY, current);
+    share();
   }
 
-  // Width lives in the Layout section, so the Typography reset keeps it.
+  // Width and renderMarkdown live in other sections, so the Typography reset keeps them.
   async function reset() {
-    current = Object.assign({}, DEFAULTS, { width: current.width });
+    current = Object.assign({}, DEFAULTS, { width: current.width, renderMarkdown: current.renderMarkdown });
     apply();
     await CC.host.storageSet(KEY, current);
+    share();
+  }
+
+  // Other extensions (ticket-board) read the resolved variables from ~/.config/claude-chat/typography.json.
+  let shareTimer = null;
+  function share() {
+    clearTimeout(shareTimer);
+    shareTimer = setTimeout(function () {
+      const root = document.documentElement.style;
+      const vars = {};
+      ["--chat-font", "--chat-size", "--chat-lh", "--code-size", "--mono"].forEach(function (name) {
+        vars[name] = root.getPropertyValue(name);
+      });
+      CC.host.reader("saveTypography", { settings: current, vars: vars }).catch(function (e) {
+        console.warn("typography share failed", e && e.message);
+      });
+    }, 400);
   }
 
   // Families installed on the Mac; empty when the server cannot ask it (no open-file bridge).

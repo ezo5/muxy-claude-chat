@@ -2,7 +2,8 @@
 # claude-chat open-file bridge. launchd (dev.claude-chat.open-bridge.<server>) runs it when <dir>/req changes, or,
 # with --poll SECS (sshfs: launchd misses changes made on the server), keeps it running and it scans <dir>/req.
 # A request <dir>/req/<id>.json {"id","path","line","app","root","ts"} names a server path under
-# --server-root; it is mapped to --host-root, opened, and answered in <dir>/res/<id>.json.
+# --server-root; it is mapped to --host-root, opened, and answered in <dir>/res/<id>.json. App "url" opens an
+# http(s) link from "path" in the default browser.
 emulate -R zsh
 setopt no_unset pipe_fail extended_glob
 zmodload zsh/datetime
@@ -52,7 +53,7 @@ function run(argv) {
   if (line === undefined || line === null || line === "") line = "-";
   else if (typeof line === "number" && line % 1 === 0 && line > 0 && line < 1e9) line = String(line);
   else throw new Error("bad line");
-  return [str("id", /^[A-Za-z0-9._-]{1,128}$/), str("app", /^(zed|idea|finder|ping|fonts)$/), line, str("root"), str("path")].join("\n");
+  return [str("id", /^[A-Za-z0-9._-]{1,128}$/), str("app", /^(zed|idea|finder|ping|fonts|url)$/), line, str("root"), str("path")].join("\n");
 }'
 
 RESULT_JS='function run(a) { var r = {ok: a[0] === "1"}; if (!r.ok) r.error = a[1] || "open failed"; return JSON.stringify(r); }'
@@ -156,6 +157,17 @@ handle() { # <request file>
   fi
   if [[ $app == fonts ]]; then
     respond_fonts $id; return
+  fi
+  if [[ $app == url ]]; then
+    if [[ $spath != (#i)http(s|)://[^[:space:]]## ]]; then
+      log "$id: rejected url ${(q+)spath}"; respond $id 0 "only http(s) links can be opened"; return
+    fi
+    if launch /usr/bin/open $spath; then
+      log "$id: url $spath"; respond $id 1
+    else
+      log "$id: url $spath failed: $launch_err"; respond $id 0 "${launch_err:-could not open the link}"
+    fi
+    return
   fi
   if [[ $spath != $server_root && $spath != $server_root/* ]] || [[ "$spath/" == */../* || "$spath/" == */./* || $spath == *//* ]]; then
     log "$id: rejected path ${(q+)spath}"; respond $id 0 "only plain paths under $server_root can be opened"; return

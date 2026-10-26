@@ -1,5 +1,5 @@
 """Interactive Claude TUIs: ~/.claude/sessions/<pid>.json (written by the CLI), SIGTERM, transcript paths."""
-import glob, json, os, re, signal, time
+import glob, json, os, re, shutil, signal, time
 
 HOME = os.path.expanduser("~")
 CLAUDE = os.path.join(HOME, ".claude")
@@ -18,6 +18,17 @@ def alive(pid):
 
 def transcript_path(cwd, sid):
     return os.path.join(CLAUDE, "projects", re.sub(r"[^A-Za-z0-9]", "-", cwd or ""), str(sid) + ".jsonl")
+
+
+# A conversation written under another cwd (e.g. a removed worktree): --resume only looks in the cwd's project dir, so copy it there.
+def adopt_transcript(cwd, sid):
+    dest = transcript_path(cwd, sid)
+    if not sid or os.path.isfile(dest):
+        return
+    found = sorted(glob.glob(os.path.join(CLAUDE, "projects", "*", str(sid) + ".jsonl")), key=os.path.getmtime)
+    if found:
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        shutil.copy2(found[-1], dest)
 
 
 def live_sessions():

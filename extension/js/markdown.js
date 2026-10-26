@@ -96,24 +96,44 @@ CC.markdown = (function () {
     }
   }
 
-  function showMenu(e, target) {
+  function pathItems(target) {
+    return OPEN_WITH.map(function (o) {
+      return { label: o.label, run: function () { openWith(target, o.app, o.label); } };
+    }).concat([{ label: "Copy path", run: function () { copy(target); } }]);
+  }
+
+  async function openUrl(url, where) {
+    try {
+      if (where === "muxy") {
+        await muxy.tabs.open({ kind: "browser", url: url });
+      } else {
+        await CC.host.reader("openUrl", { url: url });
+      }
+    } catch (err) {
+      util.toast("Open failed: " + (err && err.message), "error");
+    }
+  }
+
+  function urlItems(url) {
+    return [
+      { label: "Open in Muxy browser", run: function () { openUrl(url, "muxy"); } },
+      { label: "Open in default browser", run: function () { openUrl(url, "host"); } },
+      { label: "Copy link", run: function () { copy(url); } },
+    ];
+  }
+
+  function showMenu(e, items) {
     closeMenu();
     const menu = util.el("div", "path-menu");
     menu.id = "path-menu";
-    OPEN_WITH.forEach(function (o) {
+    items.forEach(function (o) {
       const b = util.el("button", "path-menu-item", o.label);
       b.addEventListener("click", function () {
         closeMenu();
-        openWith(target, o.app, o.label);
+        o.run();
       });
       menu.appendChild(b);
     });
-    const c = util.el("button", "path-menu-item", "Copy path");
-    c.addEventListener("click", function () {
-      closeMenu();
-      copy(target);
-    });
-    menu.appendChild(c);
     document.body.appendChild(menu);
     const r = menu.getBoundingClientRect();
     menu.style.left = Math.max(4, Math.min(e.clientX, window.innerWidth - r.width - 4)) + "px";
@@ -139,11 +159,15 @@ CC.markdown = (function () {
     const target = String(href).replace(/#L(\d+)(?:C(\d+))?(?:-L?\d+(?:C\d+)?)?$/, function (m, line, col) {
       return ":" + line + (col ? ":" + col : "");
     });
+    if (!e.metaKey && /^https?:\/\//i.test(target) && window.muxy != null) {
+      showMenu(e, urlItems(target));
+      return;
+    }
     if (e.metaKey || !isPath(target) || CC.openPath == null) {
       copy(target);
       return;
     }
-    showMenu(e, target);
+    showMenu(e, pathItems(target));
   }
 
   let ready = false;
@@ -223,6 +247,32 @@ CC.markdown = (function () {
     return wrap;
   }
 
+  // A file's content; .md files also get a rendered view, shown per Settings → General and flipped in the header.
+  function fileBlock(code, path, opts) {
+    const lang = langFromPath(path);
+    const block = codeBlock(code, lang, opts);
+    if (lang !== "markdown") {
+      return block;
+    }
+    const doc = render(code, opts);
+    doc.classList.add("md-file");
+    block.appendChild(doc);
+    const btn = util.el("button", "copy-btn code-toggle");
+    btn.type = "button";
+    function show(rendered) {
+      block.classList.toggle("md-rendered", rendered);
+      btn.textContent = rendered ? "Source" : "Preview";
+    }
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      show(!block.classList.contains("md-rendered"));
+    });
+    const head = block.querySelector(".code-head");
+    head.insertBefore(btn, head.lastChild);
+    show(CC.typography.get().renderMarkdown);
+    return block;
+  }
+
   function langFromPath(path) {
     const m = /\.([A-Za-z0-9+]+)$/.exec(path || "");
     if (m == null) {
@@ -233,5 +283,5 @@ CC.markdown = (function () {
     return map[ext] || "";
   }
 
-  return { render: render, codeBlock: codeBlock, highlight: highlight, escapeHtml: escapeHtml, langFromPath: langFromPath };
+  return { render: render, codeBlock: codeBlock, fileBlock: fileBlock, highlight: highlight, escapeHtml: escapeHtml, langFromPath: langFromPath };
 })();

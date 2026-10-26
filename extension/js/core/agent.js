@@ -55,7 +55,8 @@ CC.Agent = (function () {
     this.answered = {};
     this.store.setStatus("connecting");
     const req = { cwd: o.cwd || this.cwd, sessionId: o.sessionId || this.sessionId || undefined, resume: o.resume, forkSession: o.forkSession,
-      model: o.model, effort: o.effort, permissionMode: o.permissionMode, cliSessionId: o.cliSessionId };
+      model: o.model, effort: o.effort, permissionMode: o.permissionMode, cliSessionId: o.cliSessionId,
+      pluginDirs: o.pluginDirs, addDirs: o.addDirs, appendSystemPromptFile: o.appendSystemPromptFile };
     let res;
     try {
       res = await CC.host.cli("start", req);
@@ -116,7 +117,8 @@ CC.Agent = (function () {
         await this.waitStopped(prev);
       }
     }
-    return this.start({ sessionId: o.sessionId || prev, resume: o.resume !== false, forkSession: o.forkSession, cwd: o.cwd, model: o.model, effort: o.effort, permissionMode: o.permissionMode });
+    return this.start({ sessionId: o.sessionId || prev, resume: o.resume !== false, forkSession: o.forkSession, cwd: o.cwd, model: o.model, effort: o.effort, permissionMode: o.permissionMode,
+      addDirs: o.addDirs });
   };
 
   Agent.prototype.waitStopped = async function (sid) {

@@ -1,7 +1,7 @@
 window.CC = window.CC || {};
 
-// Diff of the working tree, one of Claude's turns, a commit or a commit range; comments on a line or a line range are
-// kept as drafts and go to Claude as one prompt.
+// Diff of the working tree, the branch against its base, one of Claude's turns, a commit or a commit range; comments
+// on a line or a line range are kept as drafts and go to Claude as one prompt.
 CC.Review = (function () {
   const util = CC.util;
   const el = util.el;
@@ -64,8 +64,10 @@ CC.Review = (function () {
     return same * 4 < Math.max(a.trim().length, b.trim().length) ? null : [sa, sb];
   }
 
-  function codeNode(text, segs) {
+  // `side` / `line` say where paint() finds the line's syntax tokens.
+  function codeNode(text, segs, side, line) {
     const node = el("span", "rv-code");
+    node.hl = { side: side, line: line, segs: segs, text: text };
     if (segs == null) {
       node.textContent = text;
       return node;
@@ -74,6 +76,69 @@ CC.Review = (function () {
       node.appendChild(sg[1] ? el("span", "rv-word", sg[0]) : document.createTextNode(sg[0]));
     });
     return node;
+  }
+
+  // highlight.js output split into lines of [text, class of the nearest span] runs.
+  function tokenLines(code, lang) {
+    const tpl = document.createElement("template");
+    tpl.innerHTML = CC.markdown.highlight(code, lang);
+    const lines = [[]];
+    const walk = document.createTreeWalker(tpl.content, NodeFilter.SHOW_TEXT);
+    for (let t = walk.nextNode(); t != null; t = walk.nextNode()) {
+      const cls = t.parentNode.nodeType === 1 ? t.parentNode.className : "";
+      t.data.split("\n").forEach(function (s, i) {
+        if (i > 0) {
+          lines.push([]);
+        }
+        if (s !== "") {
+          lines[lines.length - 1].push([s, cls]);
+        }
+      });
+    }
+    return lines;
+  }
+
+  // Each side of a hunk is highlighted as one text, so comments and strings spanning lines come out right.
+  function hunkTokens(h, lang, tok) {
+    const old = [];
+    const neu = [];
+    h.lines.forEach(function (l) {
+      if (l.charAt(0) !== "+") {
+        old.push(l.slice(1));
+      }
+      if (l.charAt(0) !== "-") {
+        neu.push(l.slice(1));
+      }
+    });
+    tokenLines(old.join("\n"), lang).forEach(function (runs, i) {
+      tok.old.set(h.o + i, runs);
+    });
+    tokenLines(neu.join("\n"), lang).forEach(function (runs, i) {
+      tok.new.set(h.n + i, runs);
+    });
+  }
+
+  // Token runs nested inside the word-diff segments.
+  function paintCode(node, runs, segs) {
+    node.textContent = "";
+    let ri = 0;
+    let off = 0;
+    (segs || [[node.hl.text, false]]).forEach(function (sg) {
+      const host = sg[1] ? node.appendChild(el("span", "rv-word")) : node;
+      let left = sg[0].length;
+      while (left > 0 && ri < runs.length) {
+        const run = runs[ri];
+        const take = Math.min(left, run[0].length - off);
+        const piece = run[0].substr(off, take);
+        host.appendChild(run[1] !== "" ? el("span", run[1], piece) : document.createTextNode(piece));
+        left -= take;
+        off += take;
+        if (off === run[0].length) {
+          ri++;
+          off = 0;
+        }
+      }
+    });
   }
 
   function newCount(h) {
@@ -283,6 +348,7 @@ CC.Review = (function () {
     this.texts = new Map();
     this.order = new Map();
     this.pick = null;
+    this.stuck = null;
     this.badge = el("span", "hdr-badge hidden");
     toggleBtn.appendChild(this.badge);
 
@@ -309,6 +375,7 @@ CC.Review = (function () {
         const r = self.rangeInput.value.trim();
         self.setSource({ id: "range:" + r, label: "the commit range " + r, range: r });
       } else if (e.key === "Escape") {
+        e.preventDefault();
         self.rangeInput.classList.add("hidden");
         self.sourceSel.value = self.src.id;
       }
@@ -355,7 +422,12 @@ CC.Review = (function () {
     search.addEventListener("click", function () {
       self.find.open();
     });
-    bar.append(seg, search, refresh, this.sendBtn, close);
+    this.foldBtn = el("button", "icon-btn rv-fold");
+    this.foldBtn.type = "button";
+    this.foldBtn.addEventListener("click", function () {
+      self.foldAll(!self.allFolded());
+    });
+    bar.append(seg, this.foldBtn, search, refresh, this.sendBtn, close);
 
     this.side = el("aside", "rv-side");
     this.sideHead = el("div", "rv-side-head");
@@ -384,6 +456,15 @@ CC.Review = (function () {
         });
       }
     });
+    this.lazy = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (e.isIntersecting) {
+          self.lazy.unobserve(e.target);
+          e.target.seen = true;
+          e.target.paint();
+        }
+      });
+    }, { root: this.scroll, rootMargin: "800px 0px" });
     const main = el("div", "rv-main");
     main.append(this.side, this.scroll);
     section.append(bar, main);
@@ -407,6 +488,13 @@ CC.Review = (function () {
     toggleBtn.addEventListener("click", function () {
       self.setOpen(section.classList.contains("hidden"));
     });
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && !e.defaultPrevented && !section.classList.contains("hidden") &&
+        document.querySelector(".lightbox, .settings-overlay:not(.hidden)") == null) {
+        e.preventDefault();
+        self.setOpen(false);
+      }
+    });
     CC.host.storageGet(this.key).then(function (v) {
       self.comments = Array.isArray(v) ? v : [];
       self.updateCount();
@@ -426,6 +514,7 @@ CC.Review = (function () {
       self.setSide(v !== false && !window.matchMedia(NARROW).matches, false);
     });
     this.setMode("unified", false);
+    this.updateFold();
     this.updateCount();
   }
 
@@ -486,6 +575,9 @@ CC.Review = (function () {
       parent.appendChild(o);
     };
     add(sel, WORKTREE, "Uncommitted changes");
+    if (res.base != null) {
+      add(sel, { id: "base:" + res.base, label: "this branch's changes against " + res.base, base: res.base }, "Branch vs " + res.base);
+    }
     const turns = this.turnSources();
     if (turns.length > 0) {
       const g = el("optgroup");
@@ -504,7 +596,7 @@ CC.Review = (function () {
       sel.appendChild(g);
     }
     if (!known.has(this.src.id)) {
-      add(sel, this.src, this.src.range != null ? this.src.range : this.src.label);
+      add(sel, this.src, this.src.range != null ? this.src.range : this.src.base != null ? "Branch vs " + this.src.base : this.src.label);
     }
     sel.appendChild(new Option("Commit range…", "range"));
     sel.value = this.src.id;
@@ -595,7 +687,7 @@ CC.Review = (function () {
     try {
       const src = this.src;
       const res = src.files != null ? { root: (this.sources || {}).root || this.deps.cwd() || null, files: src.files }
-        : await CC.host.reader("diff", { cwd: this.deps.cwd() || ".", turn: src.turn, file: src.turn != null ? this.deps.file() : null, commit: src.commit, range: src.range });
+        : await CC.host.reader("diff", { cwd: this.deps.cwd() || ".", turn: src.turn, file: src.turn != null ? this.deps.file() : null, commit: src.commit, range: src.range, base: src.base });
       if (src !== this.src) {
         return;
       }
@@ -645,7 +737,7 @@ CC.Review = (function () {
       self.addAnchors(f);
     });
     if (this.files.length === 0) {
-      this.showEmpty(this.src === WORKTREE ? "No changes against HEAD." : "No changes.");
+      this.showEmpty(this.src === WORKTREE ? "No changes against HEAD." : this.src.base != null ? "No changes against " + this.src.base + "." : "No changes.");
       return;
     }
     const totals = plural(this.files.length, "file") + " · +" + add + " −" + del + (this.truncated ? " · truncated" : "");
@@ -653,8 +745,11 @@ CC.Review = (function () {
     this.summary.title = this.root || "";
     this.renderSide(add, del);
     this.list.textContent = "";
+    this.lazy.disconnect();
     this.files.forEach(function (f) {
-      self.list.appendChild(self.fileNode(f));
+      const box = self.fileNode(f);
+      self.list.appendChild(box);
+      self.lazy.observe(box);
     });
     this.renderOrphans();
     this.trackActive();
@@ -867,6 +962,17 @@ CC.Review = (function () {
     if (current != null && current !== this.active) {
       self.setActive(current);
     }
+    const box = this.boxes.get(current);
+    const stuck = box != null && !this.collapsed.has(current) && this.scroll.scrollTop > box.offsetTop ? box : null;
+    if (stuck !== this.stuck) {
+      if (this.stuck != null) {
+        this.stuck.classList.remove("stuck");
+      }
+      if (stuck != null) {
+        stuck.classList.add("stuck");
+      }
+      this.stuck = stuck;
+    }
   };
 
   Review.prototype.setActive = function (path) {
@@ -886,6 +992,7 @@ CC.Review = (function () {
     const self = this;
     const box = el("div", "rv-file");
     const head = el("div", "rv-file-head");
+    head.title = "Collapse or expand (Alt+click: all files)";
     head.appendChild(util.icon("chevron"));
     const name = el("span", "rv-path st-" + f.status, f.status === "renamed" && f.old ? f.old + " → " + f.path : f.path);
     name.title = f.path;
@@ -911,20 +1018,93 @@ CC.Review = (function () {
       body.textContent = "";
       if (open) {
         self.fillBody(f, body);
+        if (box.seen) {
+          self.paint(f, box);
+        }
       }
+      self.updateFold();
       self.find.refresh();
     };
-    head.addEventListener("click", function () {
+    box.paint = function () {
+      self.paint(f, box);
+    };
+    head.addEventListener("click", function (e) {
+      if (e.altKey) {
+        self.foldAll(!self.collapsed.has(f.path));
+        return;
+      }
+      const stuck = self.scroll.scrollTop > box.offsetTop;
       if (self.collapsed.has(f.path)) {
         self.collapsed.delete(f.path);
       } else {
         self.collapsed.add(f.path);
       }
       box.fill();
+      if (stuck) {
+        self.scroll.scrollTop = box.offsetTop - 12;
+      }
+      self.trackActive();
     });
     this.boxes.set(f.path, box);
     box.fill();
     return box;
+  };
+
+  Review.prototype.paint = function (f, box) {
+    const lang = CC.markdown.langFromPath(f.path);
+    if (lang === "" || this.collapsed.has(f.path)) {
+      return;
+    }
+    const tok = { old: new Map(), new: new Map() };
+    this.parts(f).forEach(function (p) {
+      if (p.hunk != null) {
+        hunkTokens(p.hunk, lang, tok);
+      }
+    });
+    box.querySelectorAll(".rv-code").forEach(function (node) {
+      const runs = tok[node.hl.side].get(node.hl.line);
+      if (runs != null && runs.map(function (r) {
+        return r[0];
+      }).join("") === node.hl.text) {
+        paintCode(node, runs, node.hl.segs);
+      }
+    });
+    this.find.refresh();
+  };
+
+  Review.prototype.allFolded = function () {
+    const self = this;
+    return this.files.length > 0 && this.files.every(function (f) {
+      return self.collapsed.has(f.path);
+    });
+  };
+
+  Review.prototype.updateFold = function () {
+    const all = this.allFolded();
+    this.foldBtn.title = all ? "Expand all files" : "Collapse all files";
+    this.foldBtn.textContent = "";
+    this.foldBtn.appendChild(util.icon(all ? "unfold" : "fold"));
+  };
+
+  // The current file's header stays at the top.
+  Review.prototype.foldAll = function (fold) {
+    const self = this;
+    const keep = this.active;
+    this.files.forEach(function (f) {
+      if (self.collapsed.has(f.path) !== fold) {
+        if (fold) {
+          self.collapsed.add(f.path);
+        } else {
+          self.collapsed.delete(f.path);
+        }
+        self.boxes.get(f.path).fill();
+      }
+    });
+    const box = this.boxes.get(keep);
+    if (box != null) {
+      this.scroll.scrollTop = box.offsetTop - 12;
+    }
+    this.trackActive();
   };
 
   Review.prototype.fillBody = function (f, body) {
@@ -968,7 +1148,7 @@ CC.Review = (function () {
           }
         }
         row.append(el("span", "rv-ln", sign === "+" ? "" : String(o)), el("span", "rv-ln", sign === "-" ? "" : String(n)));
-        row.append(el("span", "rv-sign", sign === " " ? "" : sign), codeNode(line.slice(1), words.get(idx) || null));
+        row.append(el("span", "rv-sign", sign === " " ? "" : sign), codeNode(line.slice(1), words.get(idx) || null, sign === "-" ? "old" : "new", sign === "-" ? o : n));
         self.bindLine(f, row, { sign: sign, line: sign === "-" ? o : n, code: line.slice(1) }, row, null, keys);
         body.appendChild(row);
         if (sign !== "+") {
@@ -1037,7 +1217,7 @@ CC.Review = (function () {
       return el("div", "rv-half empty");
     }
     const node = el("div", "rv-half" + (cell.sign === "+" ? " add" : cell.sign === "-" ? " del" : ""));
-    node.append(el("span", "rv-ln", String(cell.line)), el("span", "rv-sign", cell.sign === " " ? "" : cell.sign), codeNode(cell.code, segs));
+    node.append(el("span", "rv-ln", String(cell.line)), el("span", "rv-sign", cell.sign === " " ? "" : cell.sign), codeNode(cell.code, segs, side === "l" ? "old" : "new", cell.line));
     const anchor = cell.sign === " " ? right : cell;
     this.bindLine(f, node, anchor, row, cell.sign === " " ? "r" : side, keys);
     return node;

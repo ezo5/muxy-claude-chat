@@ -33,6 +33,7 @@ CC.Settings = (function () {
     });
     document.addEventListener("keydown", function (e) {
       if (e.key === "Escape" && !self.overlay.classList.contains("hidden")) {
+        e.preventDefault();
         self.close();
       }
     });
@@ -113,6 +114,16 @@ CC.Settings = (function () {
     });
     auto.append(check, el("span", "", "Back to chat when the terminal Claude exits"));
     termGroup.appendChild(auto);
+    const mdGroup = this.group(body, "Markdown files");
+    const mdRow = el("label", "settings-row");
+    const mdCheck = el("input");
+    mdCheck.type = "checkbox";
+    mdCheck.checked = CC.typography.get().renderMarkdown;
+    mdCheck.addEventListener("change", function () {
+      CC.typography.save({ renderMarkdown: mdCheck.checked });
+    });
+    mdRow.append(mdCheck, el("span", "", "Show read and written .md files rendered (toggle per file in its header)"));
+    mdGroup.appendChild(mdRow);
     if (this.actions.length > 0) {
       const actGroup = this.group(body, "This chat");
       this.actions.forEach(function (a) {
@@ -260,12 +271,16 @@ CC.Settings = (function () {
 
   Settings.prototype.toggle = function () {
     if (this.overlay.classList.contains("hidden")) {
-      this.render();
-      this.overlay.classList.remove("hidden");
-      this.btn.classList.add("active");
+      this.open();
     } else {
       this.close();
     }
+  };
+
+  Settings.prototype.open = function () {
+    this.render();
+    this.overlay.classList.remove("hidden");
+    this.btn.classList.add("active");
   };
 
   Settings.prototype.close = function () {

@@ -230,7 +230,7 @@ CC.Composer = (function () {
       hint = this.suggestion != null ? "⇥ / → accept suggestion" : "/ commands · @ files · ↑ history";
     }
     this.hint.textContent = hint;
-    this.sendBtn.title = working ? "Interrupt Claude (Esc)" : this.canSendNow() ? "Send (Enter)" : "Add to queue (Enter)";
+    this.sendBtn.title = working ? "Interrupt Claude (Esc, Ctrl+C)" : this.canSendNow() ? "Send (Enter)" : "Add to queue (Enter)";
     this.sendBtn.classList.toggle("queue-mode", !working && !this.canSendNow());
     this.input.placeholder = this.placeholderFor();
   };

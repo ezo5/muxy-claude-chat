@@ -104,14 +104,30 @@ CC.Find = (function () {
     }
     this.opts.root.querySelectorAll(this.opts.roots).forEach(function (root) {
       const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      const nodes = [];
+      const starts = [];
+      let text = "";
       for (let node = walk.nextNode(); node != null; node = walk.nextNode()) {
-        const hay = node.data.toLowerCase();
-        for (let at = hay.indexOf(needle); at >= 0; at = hay.indexOf(needle, at + needle.length)) {
-          const r = document.createRange();
-          r.setStart(node, at);
-          r.setEnd(node, at + needle.length);
-          out.push(r);
+        nodes.push(node);
+        starts.push(text.length);
+        text += node.data;
+      }
+      // Matched over the root's whole text: highlighted code splits words into many text nodes.
+      const hay = text.toLowerCase();
+      let k = 0;
+      for (let at = hay.indexOf(needle); at >= 0; at = hay.indexOf(needle, at + needle.length)) {
+        const end = at + needle.length;
+        while (k + 1 < nodes.length && starts[k + 1] <= at) {
+          k++;
         }
+        let e = k;
+        while (e + 1 < nodes.length && starts[e + 1] < end) {
+          e++;
+        }
+        const r = document.createRange();
+        r.setStart(nodes[k], at - starts[k]);
+        r.setEnd(nodes[e], end - starts[e]);
+        out.push(r);
       }
     });
     return out;

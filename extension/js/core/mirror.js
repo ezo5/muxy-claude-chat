@@ -1,19 +1,21 @@
-window.CC = window.CC || {};
-
-// Terminal mode: follows one interactive Claude's transcript with the V1 reader (`poll` pinned by pid / session id,
-// `wait` long poll) and feeds the store read-only. `res.session` is the TUI (status, waitingFor, pid) or null.
+// Terminal mode: follows one interactive Claude's transcript and feeds the store read-only. Reader `poll` params pinned by pid / session
+// id go through CC.Hub. `res.session` is the TUI (status, waitingFor, pid) or null. Also used for a read-only subagent transcript.
 CC.Mirror = (function () {
   const STATUS = { idle: "idle", busy: "busy", waiting: "waiting" };
   const AGENT_STATUS = { running: "busy", done: "idle", error: "error", stopped: "stopped" };
 
   function Mirror(store, opts) {
     this.store = store;
+    this.key = opts.key || "mirror:" + CC.util.uid();
+    this.server = opts.server || CC.Servers.focused();
     this.cwd = opts.cwd || null;
     this.cliSessionId = opts.cliSessionId || null;
     this.pid = opts.pid || null;
     this.fileHint = opts.file || null;
     this.agentFile = opts.agentFile || null;
     this.daemon = opts.daemon || null;
+    this.hooks = opts.hooks || null;
+    this.answered = {};
     this.onTui = opts.onTui || function () {};
     this.file = null;
     this.offset = 0;
@@ -21,10 +23,9 @@ CC.Mirror = (function () {
     this.watch = null;
     this.tui = null;
     this.running = false;
-    this.busy = false;
-    this.timer = null;
-    this.waiting = null;
-    this.waitFailedAt = 0;
+    this.off = null;
+    this.caughtUp = Promise.resolve();
+    this.reachedEnd = function () {};
   }
 
   Mirror.prototype.begin = function () {
@@ -34,75 +35,77 @@ CC.Mirror = (function () {
     this.store.setStatus("connecting");
     this.file = null;
     this.offset = 0;
+    this.watch = null;
     this.running = true;
-    this.kick(0);
+    const self = this;
+    this.caughtUp = new Promise(function (resolve) {
+      self.reachedEnd = resolve;
+    });
+    this.follow();
   };
 
   Mirror.prototype.end = function () {
     this.running = false;
-    clearTimeout(this.timer);
-    if (this.waiting != null) {
-      const job = this.waiting;
-      this.waiting = null;
-      job.cancel();
+    if (this.off != null) {
+      this.off();
+      this.off = null;
     }
   };
 
   Mirror.prototype.request = function () {
-    if (this.agentFile != null) {
-      return { agentFile: this.agentFile, daemon: this.daemon, file: this.file, offset: this.file != null ? this.offset : 0 };
+    const req = this.agentFile != null
+      ? { agentFile: this.agentFile, daemon: this.daemon, file: this.file, offset: this.file != null ? this.offset : 0 }
+      : { cwd: this.cwd, pinned: true, file: this.file || this.fileHint, offset: this.file != null ? this.offset : 0 };
+    if (this.agentFile == null) {
+      if (this.pid != null) {
+        req.pid = this.pid;
+      }
+      if (this.cliSessionId != null) {
+        req.sessionId = this.cliSessionId;
+      }
+      if (this.hooks != null) {
+        req.hooks = this.hooks;
+      }
     }
-    const req = { cwd: this.cwd, pinned: true, file: this.file || this.fileHint, offset: this.file != null ? this.offset : 0 };
-    if (this.pid != null) {
-      req.pid = this.pid;
-    }
-    if (this.cliSessionId != null) {
-      req.sessionId = this.cliSessionId;
+    if (this.watch != null) {
+      req.watch = this.watch;
     }
     return req;
   };
 
-  Mirror.prototype.kick = function (delay) {
+  // The params change with every reply (file, offset, watch), so each reply subscribes again with the new ones.
+  Mirror.prototype.follow = function () {
     const self = this;
-    clearTimeout(this.timer);
-    if (this.waiting != null) {
-      const job = this.waiting;
-      this.waiting = null;
-      job.cancel();
+    if (this.off != null) {
+      this.off();
     }
+    this.off = CC.Hub.of(this.server).mirror(this.key, this.request(), function (res) {
+      self.onPoll(res);
+    });
+  };
+
+  Mirror.prototype.onPoll = function (res) {
     if (!this.running) {
       return;
     }
-    this.timer = setTimeout(function () {
-      self.poll();
-    }, delay == null ? 0 : delay);
-  };
-
-  Mirror.prototype.schedule = function () {
-    if (!this.running) {
+    if (res == null || res.more !== true) {
+      this.reachedEnd();
+    }
+    if (res != null && res.error != null) {
+      this.watch = null;
+      this.store.setStatus("error", String(res.error));
+      this.follow();
       return;
     }
-    if (this.watch != null && Date.now() - this.waitFailedAt > 60000) {
-      this.wait();
-      return;
-    }
-    this.kick(this.tui != null && this.tui.status !== "idle" ? 900 : 1600);
-  };
-
-  Mirror.prototype.wait = async function () {
-    const job = CC.host.readerJob("wait", { watch: this.watch, timeoutMs: 25000 });
-    this.waiting = job;
+    // More to read: without a watch the server answers at once.
+    this.watch = res.more === true ? null : res.watch || null;
     try {
-      await job.result;
+      this.apply(res);
     } catch (e) {
-      if (this.waiting === job) {
-        this.waitFailedAt = Date.now();
-        console.warn("mirror wait failed, polling instead", e && e.message);
-      }
+      console.error("mirror " + this.key + " failed", e);
     }
-    if (this.waiting === job) {
-      this.waiting = null;
-      this.kick(0);
+    if (this.running) {
+      this.follow();
     }
   };
 
@@ -132,45 +135,37 @@ CC.Mirror = (function () {
       this.store.setStatus(AGENT_STATUS[res.agentStatus] || "stopped", null);
       return;
     }
-    this.store.setStatus(tui != null ? STATUS[tui.status] || "idle" : "offline", tui != null ? tui.waitingFor : null);
+    const hooks = tui != null ? res.hooks || null : null;
+    const self = this;
+    const pending = hooks != null ? hooks.pending.filter(function (p) {
+      return self.answered[p.requestId] !== true;
+    }) : [];
+    if (pending.length > 0 || this.store.pending.length > 0) {
+      this.store.setPending(pending);
+    }
+    // hooks are exact for prompts, permissions and turn ends; an Esc interrupt only shows in the session file
+    if (hooks != null && (hooks.status === "waiting" || hooks.at >= (tui.updatedAt || 0))) {
+      this.store.setStatus(hooks.status, hooks.status === "waiting" ? "permission" : null);
+    } else {
+      this.store.setStatus(tui != null ? STATUS[tui.status] || "idle" : "offline", tui != null ? tui.waitingFor : null);
+    }
     this.onTui(tui);
   };
 
-  Mirror.prototype.poll = async function () {
-    if (this.busy || !this.running) {
-      return;
-    }
-    this.busy = true;
-    let again = false;
-    try {
-      const res = await CC.host.reader("poll", this.request());
-      if (!this.running) {
-        return;
-      }
-      this.watch = res.watch || null;
-      this.apply(res);
-      again = res.more === true;
-    } catch (e) {
-      this.watch = null;
-      console.error(e && e.message ? e.message : e);
-      this.store.setStatus("error", e && e.message ? e.message : String(e));
-    } finally {
-      this.busy = false;
-      if (this.running) {
-        if (again) {
-          this.kick(0);
-        } else {
-          this.schedule();
-        }
-      }
-    }
+  // Answers a permission prompt of the TUI through its PermissionRequest hook (reader `hookRespond`).
+  Mirror.prototype.respond = function (requestId, behavior, extra) {
+    this.answered[requestId] = true;
+    this.store.removePending(function (p) {
+      return p.requestId === requestId;
+    });
+    return this.server.host.call("hookRespond", Object.assign({ dir: this.hooks, id: requestId, behavior: behavior }, extra || {}));
   };
 
   Mirror.prototype.loadOlder = async function () {
     if (this.file == null || this.start <= 0) {
       return;
     }
-    const res = await CC.host.reader("older", { file: this.file, before: this.start });
+    const res = await this.server.host.call("older", { file: this.file, before: this.start });
     this.start = res.start || 0;
     CC.adapters.transcript.prepend(this.store, res.items);
     this.store.setHasOlder(this.start > 0);

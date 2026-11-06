@@ -1,6 +1,6 @@
 """Subagents and background commands of one conversation: the single reducer behind the daemon's state.json rows and
 the reader's transcript scan. feed() takes transcript entries and stream-json events alike (pure, stdlib only; the
-reader embeds this file, see extension/build.py)."""
+reader imports this file)."""
 import datetime, re
 
 TASK_ID_RE = re.compile(r"<task-id>(.*?)</task-id>")
@@ -40,6 +40,16 @@ class Tracker:
         self.changed = False
         for r in rows or []:
             self.index(dict(r))
+
+    # Everything feed() needs to go on later, as JSON; the reader's sidecar keeps it.
+    def dump(self):
+        return {"rows": self.rows, "alias": self.alias, "seen": [list(k) for k in self.seen]}
+
+    @classmethod
+    def load(cls, data, parent=None):
+        t = cls(parent=parent)
+        t.rows, t.alias, t.seen = data["rows"], data["alias"], {tuple(k) for k in data["seen"]}
+        return t
 
     def index(self, row):
         self.rows[row["id"]] = row

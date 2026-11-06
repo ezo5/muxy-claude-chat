@@ -1,257 +1,169 @@
-window.CC = window.CC || {};
-
+// The view of ChatRuntime.queue, and how a prompt leaves the composer: sent, or a row there. A prompt that failed to send comes back from
+// here too: runtime.sends() holds it with its error, and this instance keeps the full images until it's sent.
 CC.Composer.use(function (composer) {
-  const util = CC.util;
-  const el = util.el;
-  const key = "queue:" + CC.host.viewId();
-  let rows = [];
-  let paused = false;
-  let windowUsed = false;
-  let usedAt = 0;
-  let delivering = false;
+  const el = CC.util.el;
+  const rt = composer.runtime;
+  const unsent = new Map();
 
-  const box = el("div", "queue hidden");
-  composer.above.appendChild(box);
+  const box = el("div", "cmp-queue");
+  box.hidden = true;
+  composer.aboveQueue.appendChild(box);
 
-  // muxy.storage caps a value at 1 MiB and the extension at 5 MiB: full images go to IndexedDB; without it a row
-  // restored after a reload sends its 480 px previews.
-  const blobs = (function () {
-    let opened = null;
-
-    function db() {
-      if (opened == null) {
-        opened = new Promise(function (resolve) {
-          setTimeout(function () {
-            resolve(null);
-          }, 3000);
-          try {
-            const req = indexedDB.open("claude-chat-queue", 1);
-            req.onupgradeneeded = function () {
-              req.result.createObjectStore("images");
-            };
-            req.onsuccess = function () {
-              resolve(req.result);
-            };
-            req.onerror = function () {
-              resolve(null);
-            };
-          } catch (e) {
-            resolve(null);
-          }
-        });
-      }
-      return opened;
-    }
-
-    async function run(mode, fn) {
-      const d = await db();
-      if (d == null) {
-        return null;
-      }
-      return new Promise(function (resolve) {
-        try {
-          const tx = d.transaction("images", mode);
-          const req = fn(tx.objectStore("images"));
-          tx.oncomplete = function () {
-            resolve(req.result || null);
-          };
-          tx.onerror = function () {
-            resolve(null);
-          };
-          tx.onabort = tx.onerror;
-        } catch (e) {
-          resolve(null);
-        }
-      });
-    }
-
-    return {
-      put: function (id, images) {
-        return run("readwrite", function (s) {
-          return s.put(images, key + ":" + id);
-        });
-      },
-      get: function (id) {
-        return run("readonly", function (s) {
-          return s.get(key + ":" + id);
-        });
-      },
-      drop: function (id) {
-        return run("readwrite", function (s) {
-          return s.delete(key + ":" + id);
-        });
-      },
-    };
-  })();
-
-  function save() {
-    CC.host.storageSet(key, rows.map(function (r) {
-      return { id: r.id, text: r.text, images: (r.images || []).map(function (img) {
-        return { media_type: img.media_type };
-      }), previews: r.previews, state: r.state === "sending" ? "failed" : r.state, error: r.error || null };
-    }));
+  function failedSends() {
+    return rt.sends != null ? rt.sends().filter(function (r) {
+      return r.error != null;
+    }) : [];
   }
 
-  function restoreImages(images, previews) {
-    const out = [];
-    (images || []).forEach(function (img, i) {
-      const p = (previews || [])[i];
-      if (img.data) {
-        out.push(img);
-      } else if (typeof p === "string" && p.indexOf("data:image/jpeg;base64,") === 0) {
-        out.push({ media_type: "image/jpeg", data: p.slice("data:image/jpeg;base64,".length) });
-      }
-    });
-    return out;
-  }
-
-  function render() {
-    box.textContent = "";
-    box.classList.toggle("hidden", rows.length === 0);
-    if (rows.length === 0) {
-      return;
-    }
-    const head = el("div", "queue-head");
-    head.appendChild(util.icon("clock"));
-    head.appendChild(el("span", "queue-title", rows.length === 1 ? "1 message waiting" : rows.length + " messages waiting"));
-    const sub = el("span", "queue-sub", paused ? "paused" : "sent one by one when Claude is free");
-    head.appendChild(sub);
-    const pauseBtn = el("button", "chip-btn", paused ? "Resume" : "Pause");
-    pauseBtn.addEventListener("click", function () {
-      paused = !paused;
-      render();
-    });
-    head.appendChild(pauseBtn);
-    box.appendChild(head);
-    rows.forEach(function (r, i) {
-      const row = el("div", "queue-row " + r.state);
-      row.appendChild(el("span", "queue-num", String(i + 1)));
-      const text = el("span", "queue-text", util.firstLine(r.text, 200) || "(image only)");
-      text.title = r.text;
-      row.appendChild(text);
-      if (r.images != null && r.images.length > 0) {
-        row.appendChild(CC.images.local(r.previews, r.images.length, "queue-thumbs"));
-      }
-      if (r.state === "sending") {
-        row.appendChild(el("span", "queue-badge", "sending…"));
-      }
-      if (r.state === "failed") {
-        const b = el("span", "queue-badge err", "not sent");
-        b.title = r.error || "";
-        row.appendChild(b);
-      }
-      const actions = el("span", "queue-actions");
-      if (i > 0) {
-        actions.appendChild(action("up", "Move up", function () {
-          rows.splice(i, 1);
-          rows.splice(i - 1, 0, r);
-          save();
-          render();
-        }));
-      }
-      actions.appendChild(action("play", r.state === "failed" ? "Retry now" : "Send now", function () {
-        deliver(r);
-      }));
-      actions.appendChild(action("edit", "Edit (back to composer)", function () {
-        remove(r);
-        const cur = composer.value();
-        composer.setValue(cur.trim() === "" ? r.text : r.text + "\n" + cur);
-        if (composer.restoreImages != null) {
-          composer.restoreImages(r.images, r.previews);
-        }
-        composer.focus();
-      }));
-      actions.appendChild(action("trash", "Remove", function () {
-        remove(r);
-      }));
-      row.appendChild(actions);
-      box.appendChild(row);
+  function action(icon, label, fn) {
+    return CC.ui.iconButton({
+      icon: icon,
+      label: label,
+      size: 14,
+      onClick: function (e) {
+        e.preventDefault();
+        fn();
+      },
     });
   }
 
-  function action(iconName, title, fn) {
-    const b = el("button", "icon-btn");
-    b.type = "button";
-    b.title = title;
-    b.appendChild(util.icon(iconName));
-    b.addEventListener("click", function (e) {
-      e.preventDefault();
-      fn();
+  function thumbs(previews) {
+    const wrap = el("span", "cmp-queue-thumbs");
+    (previews || []).forEach(function (src) {
+      if (src != null) {
+        const img = el("img");
+        img.src = src;
+        img.alt = "";
+        wrap.appendChild(img);
+      }
     });
+    return wrap;
+  }
+
+  function backToField(text, images, previews) {
+    const cur = composer.value();
+    composer.setValue(cur.trim() === "" ? text : text + "\n" + cur);
+    composer.restoreImages(images, previews);
+    composer.focus();
+  }
+
+  function textEl(r) {
+    const text = el("span", "cmp-queue-text", CC.util.firstLine(r.text, 200) || "Image only");
+    text.title = r.text;
+    return text;
+  }
+
+  function notSent(error) {
+    const b = el("span", "cmp-queue-badge is-error", "Not sent");
+    b.title = error || "";
     return b;
   }
 
-  function remove(r) {
-    rows = rows.filter(function (x) {
-      return x !== r;
-    });
-    if (r.images != null && r.images.length > 0) {
-      blobs.drop(r.id);
-    }
-    save();
-    render();
-  }
-
-  function add(entry) {
-    rows.push({ id: entry.id, text: entry.text, images: entry.images || [], previews: entry.previews || [], state: "queued" });
-    if (entry.images != null && entry.images.length > 0) {
-      blobs.put(entry.id, entry.images);
-    }
-    save();
-    render();
-  }
-
-  async function deliver(r) {
+  function rowEl(r, i) {
+    const row = el("div", "cmp-queue-row is-" + r.state);
+    row.appendChild(el("span", "cmp-queue-num", String(i + 1)));
+    row.appendChild(textEl(r));
+    row.appendChild(thumbs(r.previews));
     if (r.state === "sending") {
-      return;
+      row.appendChild(el("span", "cmp-queue-badge", "Sending"));
     }
-    r.state = "sending";
-    windowUsed = true;
-    usedAt = Date.now();
-    render();
-    try {
-      await composer.deps.send({ id: r.id, text: r.text, images: r.images, previews: r.previews, createdAt: Date.now(), queued: true });
-      remove(r);
-    } catch (e) {
-      r.state = "failed";
-      r.error = e && e.message ? e.message : String(e);
-      save();
-      render();
+    if (r.state === "failed") {
+      row.appendChild(notSent(r.error));
     }
+    const actions = el("span", "cmp-queue-actions");
+    if (i > 0) {
+      actions.appendChild(action("up", "Move up", function () {
+        rt.queue.move(r.id, -1);
+      }));
+    }
+    // While a card waits, sending past it would lose the prompt.
+    if (!composer.cardWaits()) {
+      actions.appendChild(action("play", r.state === "failed" ? "Retry now" : "Send now", function () {
+        rt.queue.sendNow(r.id);
+      }));
+    }
+    actions.appendChild(action("pencil", "Edit, back to the field", function () {
+      rt.queue.remove(r.id);
+      backToField(r.text, r.images, r.previews);
+    }));
+    actions.appendChild(action("trash", "Remove", function () {
+      rt.queue.remove(r.id);
+    }));
+    row.appendChild(actions);
+    return row;
   }
 
-  // One delivery per idle window: the daemon reports busy within ~200 ms of accepting a prompt.
-  async function tick() {
-    if (composer.status !== "idle") {
-      return;
+  function failedEl(r) {
+    const row = el("div", "cmp-queue-row is-failed");
+    row.appendChild(textEl(r));
+    row.appendChild(thumbs(r.previews));
+    row.appendChild(notSent(r.error));
+    const actions = el("span", "cmp-queue-actions");
+    actions.appendChild(action("pencil", "Edit, back to the field", function () {
+      const entry = unsent.get(r.id);
+      unsent.delete(r.id);
+      rt.dismissSend(r.id);
+      backToField(r.text, entry != null ? entry.images : [], r.previews);
+    }));
+    actions.appendChild(action("trash", "Remove", function () {
+      unsent.delete(r.id);
+      rt.dismissSend(r.id);
+    }));
+    row.appendChild(actions);
+    return row;
+  }
+
+  function subtitle() {
+    if (composer.cardWaits()) {
+      return "sent after you answer";
     }
-    if (windowUsed && Date.now() - usedAt > 15000) {
-      windowUsed = false;
-    }
-    const next = rows.find(function (r) {
-      return r.state === "queued";
+    return rt.queue.paused === true ? "paused" : "sent one by one when Claude is free";
+  }
+
+  function render() {
+    const rows = rt.queue.rows();
+    const failed = failedSends();
+    box.textContent = "";
+    box.hidden = rows.length === 0 && failed.length === 0;
+    failed.forEach(function (r) {
+      box.appendChild(failedEl(r));
     });
-    if (paused || delivering || windowUsed || next == null) {
+    if (rows.length === 0) {
       return;
     }
-    delivering = true;
-    try {
-      await deliver(next);
-    } finally {
-      delivering = false;
+    const head = el("div", "cmp-queue-head");
+    head.appendChild(CC.ui.icon("clock", 14));
+    head.appendChild(el("span", "cmp-queue-title", rows.length === 1 ? "1 message waiting" : rows.length + " messages waiting"));
+    head.appendChild(el("span", "cmp-queue-sub", subtitle()));
+    const paused = rt.queue.paused === true;
+    head.appendChild(CC.ui.chip({
+      label: paused ? "Resume" : "Pause",
+      onClick: function () {
+        rt.queue.pause(!paused);
+      },
+    }));
+    box.appendChild(head);
+    rows.forEach(function (r, i) {
+      box.appendChild(rowEl(r, i));
+    });
+    if (composer.revealCard != null) {
+      composer.revealCard();
     }
   }
 
-  composer.on("enqueue", function (entry) {
-    add(entry);
+  composer.on("send", function (entry) {
+    unsent.set(entry.id, entry);
+    Promise.resolve(rt.send(entry)).then(function () {
+      unsent.delete(entry.id);
+    }).catch(function (e) {
+      console.warn("send failed", e && e.message);
+    });
     return true;
   });
 
-  composer.on("status", function (s) {
-    if (s.status === "busy") {
-      windowUsed = false;
-    }
-    return false;
+  composer.on("enqueue", function (entry) {
+    rt.queue.add(entry);
+    return true;
   });
 
   composer.on("keydown", function (e) {
@@ -262,40 +174,38 @@ CC.Composer.use(function (composer) {
       }
       composer.emit("submitted", entry);
       composer.setValue("");
-      add(entry);
+      rt.queue.add(entry);
       return true;
     }
-    if (e.key === "ArrowUp" && e.altKey && rows.length > 0 && composer.value().trim() === "") {
-      const r = rows[rows.length - 1];
-      remove(r);
-      composer.setValue(r.text);
-      if (composer.restoreImages != null) {
-        composer.restoreImages(r.images, r.previews);
+    if (e.key === "ArrowUp" && e.altKey && composer.value().trim() === "") {
+      const rows = rt.queue.rows();
+      if (rows.length === 0) {
+        return false;
       }
+      const r = rows[rows.length - 1];
+      rt.queue.remove(r.id);
+      composer.setValue(r.text);
+      composer.restoreImages(r.images, r.previews);
       return true;
     }
     return false;
   });
 
-  composer.markSent = function () {
-    windowUsed = true;
-    usedAt = Date.now();
-  };
-
-  CC.host.storageGet(key).then(async function (saved) {
-    if (!Array.isArray(saved)) {
-      return;
+  let waited = false;
+  composer.on("pending", function () {
+    if (composer.cardWaits() !== waited) {
+      waited = composer.cardWaits();
+      render();
     }
-    const restored = [];
-    for (const r of saved) {
-      const kept = r.images != null && r.images.length > 0 ? await blobs.get(r.id) : null;
-      const images = Array.isArray(kept) && kept.length === r.images.length ? kept : restoreImages(r.images, r.previews);
-      restored.push({ id: r.id, text: r.text || "", images: images, previews: r.previews || [], state: r.state === "queued" ? "queued" : "failed", error: r.error });
-    }
-    rows = restored.concat(rows);
-    render();
+    return false;
   });
-
-  setInterval(tick, 400);
+  composer.onDispose(rt.queue.on(render));
+  composer.onDispose(rt.on("sends", render));
   render();
+  // Rows are empty until the kv read is back.
+  Promise.resolve(rt.queue.loaded).then(function () {
+    if (!composer.disposed) {
+      render();
+    }
+  });
 });

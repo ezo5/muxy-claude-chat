@@ -1,7 +1,7 @@
 import json, os, queue, signal, subprocess, sys, threading, time, uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import agent_tracker, config, procs, protocol
+import agent_tracker, config, ledger, procs, protocol, spend
 import state as S
 
 STOP_WAIT_S = 60
@@ -33,6 +33,8 @@ class Daemon:
         self.state = S.read_state(d) or S.new_state(args["sessionId"], args["cwd"])
         rows = self.state.get("agents")
         self.agents = agent_tracker.Tracker(rows if isinstance(rows, list) else None)
+        self.spend = spend.Spend(self.state.get("spend"))
+        self.state["spend"] = self.spend.data
         self.seq = S.last_seq(d)
         self.lines = queue.Queue()
         self.proc = None
@@ -103,12 +105,13 @@ class Daemon:
         argv = protocol.build_argv(claude, a.get("cliSessionId") or a["sessionId"], resume=bool(a.get("resume")), fork=bool(a.get("fork")),
                                    model=a.get("model"), effort=a.get("effort"), permission_mode=a.get("permissionMode"),
                                    partial=a.get("partial", True), extra=self.cfg.get("extraArgs"),
-                                   plugin_dirs=a.get("pluginDirs"), add_dirs=a.get("addDirs"), system_prompt_file=a.get("appendSystemPromptFile"))
+                                   plugin_dirs=a.get("pluginDirs"), add_dirs=a.get("addDirs"), system_prompt_file=a.get("appendSystemPromptFile"),
+                                   resume_at=(a.get("forkFrom") or {}).get("resumeAt"))
         log("spawn", json.dumps(argv))
         try:
             # the daemon ignores SIGHUP; the CLI must not inherit that
             self.proc = subprocess.Popen(argv, cwd=a["cwd"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=sys.stderr.fileno(),
-                                         env=protocol.cli_env(os.environ), preexec_fn=lambda: signal.signal(signal.SIGHUP, signal.SIG_DFL))
+                                         env=config.with_claude_dir(protocol.cli_env(os.environ), claude), preexec_fn=lambda: signal.signal(signal.SIGHUP, signal.SIG_DFL))
         except OSError as e:
             self.fail("cannot start claude: %s" % e)
             return False
@@ -137,7 +140,7 @@ class Daemon:
         self.daemon_event("stopped", **ev)
         S.prune_inbox(self.d, self.state.get("inboxOffset") or 0)
         self.state.update({"status": "stopped", "stoppedAt": S.now_ms(), "reason": reason, "pid": None, "cliPid": None, "pending": [],
-                           "promptQueue": [], "promptUuids": {}, "startedUuids": [], "followUp": False, "turn": {"startedAt": None, "promptId": None}, "activity": None, "inboxOffset": 0})
+                           "promptQueue": [], "promptUuids": {}, "startedUuids": [], "followUp": False, "turn": {"startedAt": None, "promptId": None}, "activity": None, "runningTools": [], "inboxOffset": 0})
         self.flush(force=True)
         try:
             os.remove(os.path.join(self.d, "daemon.pid"))
@@ -174,6 +177,13 @@ class Daemon:
         if ev is None:
             return
         t = ev.get("type")
+        turn = self.spend.feed(ev)
+        if turn is not None:
+            self.daemon_event("spend", **turn)
+            try:
+                ledger.append(ledger.entry(self.state, turn))
+            except (OSError, ValueError) as e:
+                log("ledger:", e)
         self.emit(ev, 1 if t == "stream_event" else 2)
         now = S.now_ms()
         up = protocol.apply_event(self.state, ev, now)
@@ -255,6 +265,7 @@ class Daemon:
             self.send(req)
         uid = str(uuid.uuid4())
         self.send(protocol.user_message(text, cmd.get("images"), uid))
+        self.spend.prompt(text)
         self.apply(protocol.apply_prompt(self.state, cid, text, S.now_ms(), uid))
         self.daemon_event("accepted", id=cid, cmd="prompt", text=text, images=len(cmd.get("images") or []), clientId=cmd.get("clientId"), uuid=uid)
 
@@ -307,8 +318,8 @@ class Daemon:
             self.state["inboxOffset"] = 0
         self.state.update({"pid": os.getpid(), "pidStarted": procs.start_time(os.getpid()), "cliPid": None, "cliPidStarted": None, "cliMarker": None,
                            "status": "starting", "startedAt": S.now_ms(), "stoppedAt": None, "reason": None,
-                           "pending": [], "promptQueue": [], "promptUuids": {}, "startedUuids": [], "followUp": False, "turn": {"startedAt": None, "promptId": None}, "activity": None, "cwd": self.args["cwd"],
-                           "agents": self.agents.list()})
+                           "pending": [], "promptQueue": [], "promptUuids": {}, "startedUuids": [], "followUp": False, "turn": {"startedAt": None, "promptId": None}, "activity": None, "runningTools": [], "cwd": self.args["cwd"],
+                           "agents": self.agents.list(), "forkFrom": self.args.get("forkFrom")})
         for k in ("model", "effort", "permissionMode", "pluginDirs", "addDirs", "appendSystemPromptFile"):
             if self.args.get(k):
                 self.state[k] = self.args[k]

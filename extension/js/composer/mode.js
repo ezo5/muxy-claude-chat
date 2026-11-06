@@ -1,39 +1,54 @@
-window.CC = window.CC || {};
-
-// Permission-mode chip in the toolbar: cycles default → acceptEdits → plan → auto → default through set_permission_mode.
+// The quiet row under the field. Left: permission mode in plain words, a click moves to the next one. Right: model and effort; a click opens
+// the pickers of app/js/commands/. The ring is another slot item (C5).
 CC.Composer.use(function (composer) {
-  const util = CC.util;
-  const el = util.el;
   const CYCLE = { default: "acceptEdits", acceptEdits: "plan", plan: "auto", auto: "default" };
-  const MODES = { default: "Ask before edits", acceptEdits: "Accept edits", plan: "Plan mode", auto: "Auto", bypassPermissions: "Bypass permissions", dontAsk: "Don't ask" };
+  const MODES = { default: "Ask before edits", acceptEdits: "Accept edits", plan: "Plan", auto: "Auto", bypassPermissions: "Bypass permissions", dontAsk: "Don't ask" };
   let busy = false;
 
-  const chip = el("button", "mode-chip hidden");
-  chip.type = "button";
-  chip.title = "Cycle permission mode";
-  chip.addEventListener("click", async function () {
+  function quiet(label, onClick) {
+    const b = CC.util.el("button", "cmp-quiet");
+    b.type = "button";
+    b.title = label;
+    b.hidden = true;
+    b.addEventListener("click", onClick);
+    return b;
+  }
+
+  function show(b, text) {
+    b.hidden = text == null;
+    b.textContent = text || "";
+  }
+
+  const mode = quiet("Change permission mode", async function () {
     if (busy) {
       return;
     }
-    const next = CYCLE[composer.meta.permissionMode] || "default";
     busy = true;
-    chip.classList.add("pulse");
     try {
-      await composer.deps.control("set_permission_mode", { mode: next });
+      await composer.deps.control("set_permission_mode", { mode: CYCLE[composer.meta.permissionMode] || "default" });
     } catch (e) {
-      util.toast("Mode change failed: " + (e && e.message ? e.message : e), "error");
+      CC.ui.toast("Mode change failed: " + (e && e.message ? e.message : e), { level: "error" });
     } finally {
       busy = false;
-      chip.classList.remove("pulse");
     }
   });
-  composer.left.appendChild(chip);
+  composer.belowLeft.appendChild(mode);
+
+  const model = quiet("Change model", function () {
+    CC.Pickers.openModel(composer);
+  });
+  const effort = quiet("Change effort", function () {
+    CC.Pickers.openEffort(composer);
+  });
+  composer.belowRight.append(model, effort);
 
   composer.on("meta", function (meta) {
     const m = meta.permissionMode;
-    chip.classList.toggle("hidden", m == null);
-    chip.textContent = MODES[m] || m || "";
-    chip.dataset.mode = m || "";
+    show(mode, m != null ? MODES[m] || m : null);
+    show(model, CC.Pickers.modelLabel(meta) || null);
+    show(effort, meta.effort != null ? String(meta.effort).replace(/^./, function (c) {
+      return c.toUpperCase();
+    }) : null);
     return false;
   });
 });

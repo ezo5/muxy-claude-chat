@@ -1,5 +1,5 @@
-window.CC = window.CC || {};
-
+// Images travel as base64 content blocks of the prompt, at most 2400 px, with a small preview for bubbles and queue rows. Other files upload
+// to the server in exec-sized chunks and are mentioned as @path; paths dropped from a tree or editor just become @path.
 CC.Composer.use(function (composer) {
   const util = CC.util;
   const el = util.el;
@@ -8,16 +8,18 @@ CC.Composer.use(function (composer) {
   const UPLOAD_CHUNK = 450000;
   let items = [];
 
+  const row = el("div", "cmp-chip-row");
+  composer.chips.appendChild(row);
+
   const picker = el("input");
   picker.type = "file";
   picker.multiple = true;
-  picker.style.display = "none";
+  picker.hidden = true;
   composer.root.appendChild(picker);
 
-  const btn = composer.button("paperclip", "Attach images or files (or paste / drop)", function () {
+  composer.left.appendChild(composer.button("plus", "Attach images or files (or paste, drop)", function () {
     picker.click();
-  });
-  composer.left.insertBefore(btn, composer.left.firstChild);
+  }));
 
   picker.addEventListener("change", function () {
     Array.prototype.forEach.call(picker.files, add);
@@ -25,17 +27,15 @@ CC.Composer.use(function (composer) {
   });
 
   composer.input.addEventListener("paste", function (e) {
-    const files = [];
     const dt = e.clipboardData;
     if (dt == null) {
       return;
     }
+    const files = [];
     Array.prototype.forEach.call(dt.items || [], function (it) {
-      if (it.kind === "file") {
-        const f = it.getAsFile();
-        if (f != null) {
-          files.push(f);
-        }
+      const f = it.kind === "file" ? it.getAsFile() : null;
+      if (f != null) {
+        files.push(f);
       }
     });
     if (files.length > 0) {
@@ -46,21 +46,21 @@ CC.Composer.use(function (composer) {
 
   composer.box.addEventListener("dragover", function (e) {
     e.preventDefault();
-    composer.box.classList.add("drop");
+    composer.box.classList.add("is-drop");
   });
   composer.box.addEventListener("dragleave", function () {
-    composer.box.classList.remove("drop");
+    composer.box.classList.remove("is-drop");
   });
   composer.box.addEventListener("drop", function (e) {
     e.preventDefault();
-    composer.box.classList.remove("drop");
+    composer.box.classList.remove("is-drop");
     const dt = e.dataTransfer;
     if (dt == null) {
       return;
     }
     const paths = droppedPaths(dt);
     if (paths.length > 0) {
-      composer.input.focus();
+      composer.focus();
       paths.forEach(mention);
       return;
     }
@@ -69,7 +69,7 @@ CC.Composer.use(function (composer) {
       return !/^image\//.test(f.type || "");
     });
     if (copies.length > 0) {
-      util.toast("The webview hides local file paths, so " + (copies.length === 1 ? copies[0].name + " is" : copies.length + " files are") + " uploaded to the server and mentioned from /tmp");
+      CC.ui.toast("The webview hides local file paths, so " + (copies.length === 1 ? copies[0].name + " is" : copies.length + " files are") + " uploaded to the server and mentioned from there");
     }
     files.forEach(add);
   });
@@ -93,7 +93,7 @@ CC.Composer.use(function (composer) {
   }
 
   function mention(path) {
-    const cwd = (composer.meta.cwd || "").replace(/\/+$/, "");
+    const cwd = composer.cwd().replace(/\/+$/, "");
     const rel = cwd && path.indexOf(cwd + "/") === 0 ? path.slice(cwd.length + 1) : path;
     const before = composer.value().slice(0, composer.input.selectionStart);
     composer.insertAtCaret((/\S$/.test(before) ? " " : "") + "@" + (/\s/.test(rel) ? '"' + rel + '"' : rel) + " ");
@@ -126,7 +126,7 @@ CC.Composer.use(function (composer) {
     });
   }
 
-  // Small data URL kept with the message, so pending and queued bubbles (and a reloaded queue) can show the image.
+  // Small data URL kept with the message, so bubbles and queue rows can show the image.
   async function preview(blob) {
     if (typeof createImageBitmap !== "function") {
       return null;
@@ -160,14 +160,13 @@ CC.Composer.use(function (composer) {
     return ((file.type || "").split("/")[1] || "bin").replace(/[^a-z0-9]/g, "");
   }
 
-  // Other files go to /tmp/claude-chat-images/ on the server in exec-sized chunks and are referenced as @path.
   async function upload(file) {
     const bytes = new Uint8Array(await file.arrayBuffer());
     const base = (file.name || "file").replace(/\.[^.]*$/, "").replace(/[^A-Za-z0-9_-]+/g, "_").slice(0, 40);
     const name = Date.now() + "-" + base + "." + extOf(file);
     let path = null;
     for (let i = 0; i < bytes.length || i === 0; i += UPLOAD_CHUNK) {
-      const res = await CC.host.reader("writeImage", { name: name, b64: toBase64(bytes.subarray(i, i + UPLOAD_CHUNK)), append: i > 0 });
+      const res = await CC.Servers.of(composer.runtime).host.call("writeImage", { name: name, b64: toBase64(bytes.subarray(i, i + UPLOAD_CHUNK)), append: i > 0 });
       path = res.path;
       if (bytes.length === 0) {
         break;
@@ -176,7 +175,6 @@ CC.Composer.use(function (composer) {
     return path;
   }
 
-  // Images travel as base64 content blocks of the prompt; other files are uploaded and mentioned.
   async function add(file) {
     const isImage = /^image\//.test(file.type || "");
     const item = { id: util.uid(), kind: isImage ? "image" : "file", label: file.name || (isImage ? "pasted image" : "file"), status: "uploading", thumb: isImage ? URL.createObjectURL(file) : null };
@@ -200,59 +198,63 @@ CC.Composer.use(function (composer) {
     } catch (e) {
       item.status = "error";
       item.error = e && e.message ? e.message : String(e);
-      util.toast("Attach failed: " + item.error, "error");
+      CC.ui.toast("Attach failed: " + item.error, { level: "error" });
     }
     render();
+  }
+
+  function releaseThumb(item) {
+    if (item.thumb != null && item.thumb !== item.preview) {
+      URL.revokeObjectURL(item.thumb);
+    }
   }
 
   function remove(item) {
     items = items.filter(function (x) {
       return x !== item;
     });
-    if (item.thumb != null && item.thumb !== item.preview) {
-      URL.revokeObjectURL(item.thumb);
-    }
+    releaseThumb(item);
     render();
   }
 
   function render() {
-    const row = composer.attachRow;
     row.textContent = "";
     items.forEach(function (it) {
-      const chip = el("div", "attach " + it.status);
+      const chip = el("div", "cmp-chip cmp-attach" + (it.status === "error" ? " is-error" : ""));
       if (it.thumb != null) {
         const img = el("img");
         img.src = it.thumb;
+        img.alt = it.label;
         chip.appendChild(img);
       } else {
-        chip.appendChild(util.icon("file"));
-        chip.appendChild(el("span", "attach-name", it.label));
+        chip.appendChild(CC.ui.icon("file", 14));
+        chip.appendChild(el("span", "cmp-chip-text", it.label));
       }
       if (it.status === "uploading") {
-        chip.appendChild(el("span", "attach-spinner"));
+        chip.appendChild(el("span", "cc-spin"));
       }
       chip.title = it.status === "error" ? it.error : it.label;
-      const x = el("button", "attach-x");
-      x.type = "button";
-      x.appendChild(util.icon("x"));
-      x.addEventListener("click", function () {
-        remove(it);
-      });
-      chip.appendChild(x);
+      chip.appendChild(CC.ui.iconButton({
+        icon: "x",
+        label: "Remove " + it.label,
+        size: 12,
+        onClick: function () {
+          remove(it);
+        },
+      }));
       row.appendChild(chip);
     });
-    row.classList.toggle("hidden", items.length === 0);
     composer.refresh();
   }
 
   composer.on("beforeSubmit", function () {
-    if (items.some(function (it) {
+    const loading = items.some(function (it) {
       return it.status === "uploading";
-    })) {
-      util.toast("Waiting for the attachment to load…");
-      return true;
+    });
+    if (loading) {
+      CC.ui.toast("Waiting for the attachment to load");
     }
-    return false;
+    return loading;
   });
 
   composer.on("collect", function (entry) {
@@ -269,14 +271,14 @@ CC.Composer.use(function (composer) {
   });
 
   composer.on("submitted", function () {
-    items.forEach(function (it) {
-      if (it.thumb != null && it.thumb !== it.preview) {
-        URL.revokeObjectURL(it.thumb);
-      }
-    });
+    items.forEach(releaseThumb);
     items = [];
     render();
     return false;
+  });
+
+  composer.onDispose(function () {
+    items.forEach(releaseThumb);
   });
 
   composer.restoreImages = function (images, previews) {
@@ -286,6 +288,4 @@ CC.Composer.use(function (composer) {
     });
     render();
   };
-
-  render();
 });

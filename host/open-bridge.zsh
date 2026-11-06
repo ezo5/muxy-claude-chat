@@ -3,7 +3,7 @@
 # with --poll SECS (sshfs: launchd misses changes made on the server), keeps it running and it scans <dir>/req.
 # A request <dir>/req/<id>.json {"id","path","line","app","root","ts"} names a server path under
 # --server-root; it is mapped to --host-root, opened, and answered in <dir>/res/<id>.json. App "url" opens an
-# http(s) link from "path" in the default browser.
+# http(s) link from "path" in the default browser, app "sound" plays the system sound "path" at volume "line" (%).
 emulate -R zsh
 setopt no_unset pipe_fail extended_glob
 zmodload zsh/datetime
@@ -53,7 +53,7 @@ function run(argv) {
   if (line === undefined || line === null || line === "") line = "-";
   else if (typeof line === "number" && line % 1 === 0 && line > 0 && line < 1e9) line = String(line);
   else throw new Error("bad line");
-  return [str("id", /^[A-Za-z0-9._-]{1,128}$/), str("app", /^(zed|idea|finder|ping|fonts|url)$/), line, str("root"), str("path")].join("\n");
+  return [str("id", /^[A-Za-z0-9._-]{1,128}$/), str("app", /^(zed|idea|finder|ping|fonts|url|sound)$/), line, str("root"), str("path")].join("\n");
 }'
 
 RESULT_JS='function run(a) { var r = {ok: a[0] === "1"}; if (!r.ok) r.error = a[1] || "open failed"; return JSON.stringify(r); }'
@@ -75,6 +75,18 @@ respond_fonts() { # <id>
   local out tmp=$dir/res/.$1.tmp
   out=$(/usr/bin/osascript -l JavaScript -e "$FONTS_JS" 2>/dev/null) || out='{"ok":false,"error":"could not list fonts"}'
   print -r -- "$out" >$tmp && mv -f -- $tmp $dir/res/$1.json
+}
+
+# A notification sound: "path" names a system sound, "line" is the volume in percent.
+# afplay runs in the foreground: launchd kills a detached child when the WatchPaths job exits.
+play_sound() { # <id> <name> <percent or ->
+  local file=/System/Library/Sounds/$2.aiff vol=0.6
+  if [[ $2 != [A-Za-z][A-Za-z\ ]# || ! -f $file ]]; then
+    log "$1: no such sound ${(q+)2}"; respond $1 0 "no such sound: $2"; return
+  fi
+  [[ $3 == <1-100> ]] && vol=$(( $3 / 100.0 ))
+  respond $1 1
+  /usr/bin/afplay -v $vol $file </dev/null >/dev/null 2>&1
 }
 
 # Starts argv detached from our stdio; fails only if it exits non-zero within ~3 s.
@@ -157,6 +169,9 @@ handle() { # <request file>
   fi
   if [[ $app == fonts ]]; then
     respond_fonts $id; return
+  fi
+  if [[ $app == sound ]]; then
+    play_sound $id $spath $line; return
   fi
   if [[ $app == url ]]; then
     if [[ $spath != (#i)http(s|)://[^[:space:]]## ]]; then

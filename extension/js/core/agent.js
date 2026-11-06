@@ -1,33 +1,35 @@
-window.CC = window.CC || {};
-
-// Session driver for the V2 agent host (docs/V2-CONTRACT.md): starts / stops the daemon, sends commands to its
-// inbox and feeds its events and state.json into the store through the events adapter. History before the daemon's
-// first start comes from the V1 transcript reader (`older` op) through the transcript adapter.
+// Session driver for the agent host (docs/V2-CONTRACT.md): starts and stops the daemon, sends commands to its inbox and feeds its
+// events and state through the events adapter. New data arrives from its server's CC.Hub. History before the daemon's
+// first start comes from the transcript reader (`older` op) through the transcript adapter.
 CC.Agent = (function () {
   const util = CC.util;
   const CHUNK = 350000;
   const CHUNK_AT = 400000;
   const HISTORY_SIZE = 1e12;
   const CONTROL_TIMEOUT_MS = 30000;
+  const STOP_WAIT_MS = 60000;
 
   function Agent(store, opts) {
     this.store = store;
     this.opts = opts || {};
     this.cwd = this.opts.cwd || null;
+    this.server = this.opts.server || CC.Servers.focused();
     this.sessionId = null;
     this.file = null;
     this.events = null;
-    this.stateVersion = 0;
     this.firstStartTs = null;
     this.olderStart = 0;
-    this.running = false;
-    this.busy = false;
-    this.timer = null;
-    this.waiting = null;
-    this.waitFailedAt = 0;
+    this.logStart = 0;
+    this.attaching = null;
+    this.unsubscribe = null;
+    this.attached = Promise.resolve();
+    this.attachedDone = function () {};
     this.answered = {};
     this.controls = {};
+    this.controlsSending = 0;
+    this.controlsEarly = {};
     this.generation = 0;
+    this.starting = null;
     const self = this;
     store.on("control", function (e) {
       const c = self.controls[e.id];
@@ -35,76 +37,152 @@ CC.Agent = (function () {
         delete self.controls[e.id];
         clearTimeout(c.timer);
         c.resolve(e.response);
+      } else if (self.controlsSending > 0) {
+        // The long poll can bring the result before the reply to `control` itself.
+        self.controlsEarly[e.id] = e.response;
       }
     });
   }
 
   // --- lifecycle ---
 
-  Agent.prototype.start = async function (opts) {
+  // Resolves once the daemon runs; `attached` resolves when its events and the history have loaded.
+  Agent.prototype.start = function (opts) {
+    const self = this;
+    const run = this.startDaemon(opts);
+    const settled = run.catch(function () {}).then(function () {
+      if (self.starting === settled) {
+        self.starting = null;
+      }
+    });
+    this.starting = settled;
+    return run;
+  };
+
+  Agent.prototype.startDaemon = async function (opts) {
     const o = opts || {};
     const gen = ++this.generation;
-    this.stopLoop();
+    this.detach();
+    // Before the reset, as a view that sees it asks when everything has arrived. Whoever waited on a start this one replaces has its answer in this one's reset.
+    this.attachedDone();
+    this.attached = new Promise((resolve) => {
+      this.attachedDone = resolve;
+    });
     this.store.reset();
     this.store.meta = {};
     this.store.setPending([]);
     this.events = new CC.adapters.events.Events(this.store);
     this.firstStartTs = null;
     this.olderStart = 0;
+    this.logStart = 0;
     this.file = this.opts.file || null;
     this.answered = {};
+    this.store.resuming = this.store.status === "stopped";
     this.store.setStatus("connecting");
-    const req = { cwd: o.cwd || this.cwd, sessionId: o.sessionId || this.sessionId || undefined, resume: o.resume, forkSession: o.forkSession,
+    const req = { cwd: o.cwd || this.cwd, sessionId: o.sessionId || this.sessionId || undefined, resume: o.resume, forkSession: o.forkSession, resumeAt: o.resumeAt,
       model: o.model, effort: o.effort, permissionMode: o.permissionMode, cliSessionId: o.cliSessionId,
-      pluginDirs: o.pluginDirs, addDirs: o.addDirs, appendSystemPromptFile: o.appendSystemPromptFile };
+      pluginDirs: o.pluginDirs, addDirs: o.addDirs, appendSystemPromptFile: o.appendSystemPromptFile, freshEvents: o.freshEvents };
     let res;
     try {
-      res = await CC.host.cli("start", req);
+      res = await this.server.host.call("start", req);
     } catch (e) {
-      this.store.setStatus("error", e && e.message ? e.message : String(e));
+      const msg = e && e.message ? e.message : String(e);
+      if (CC.startErrors.explain(msg) != null) {
+        this.store.add([CC.startErrors.notice("start:" + Date.now(), Date.now(), msg)]);
+      }
+      this.store.setStatus("error", msg);
+      this.server.host.probe({ fresh: true }).catch(function (err) {
+        console.warn("probe failed", err && err.message);
+      });
+      this.attachedDone();
       throw e;
     }
     if (gen !== this.generation) {
       return res;
     }
     this.sessionId = res.sessionId;
-    if (this.opts.onSession != null) {
-      this.opts.onSession(res.sessionId);
-    }
-    this.running = true;
-    await this.attach(gen);
+    this.attach(gen);
     return res;
   };
 
+  // The end of the log, then what's new from there. What's further back loads when asked for, first the rest of the log, then the transcript's
+  // history before it: a rewind target may sit in that history. Without an answer the whole log comes through the Hub.
   Agent.prototype.attach = async function (gen) {
-    let after = 0;
+    const self = this;
+    const run = {};
+    this.attaching = run;
+    const done = this.attachedDone;
+    let tail = null;
     try {
-      for (let i = 0; i < 200; i++) {
-        const res = await CC.host.cli("events", { sessionId: this.sessionId, after: after, limit: 500 });
-        if (gen !== this.generation) {
-          return;
-        }
-        this.apply(res);
-        after = Math.max(after, res.lastSeq || 0);
-        if (res.more !== true) {
-          break;
+      tail = await this.server.host.call("logTail", { sessionId: this.sessionId });
+    } catch (e) {
+      console.warn("log tail of " + this.sessionId + " failed", e && e.message);
+    }
+    if (gen !== this.generation || this.attaching !== run) {
+      done();
+      return;
+    }
+    this.attaching = null;
+    let after = 0;
+    if (tail != null && tail.after != null) {
+      after = tail.after;
+      this.logStart = tail.start || 0;
+      try {
+        this.noteFirstStart(tail.carry);
+        this.events.adopt(tail.carry);
+        this.historyMeta(tail.meta);
+        this.apply({ events: tail.events });
+      } catch (e) {
+        console.error("log tail of " + this.sessionId + " failed", e);
+      }
+      if (this.logStart > 0) {
+        this.store.setHasOlder(true);
+      }
+    }
+    let settled = false;
+    this.unsubscribe = CC.Hub.of(this.server).subscribe(this.sessionId, { after: after, stateVersion: 0 }, function (batch) {
+      if (gen !== self.generation) {
+        return;
+      }
+      try {
+        self.apply(batch);
+      } catch (e) {
+        console.error("batch of " + self.sessionId + " failed", e);
+      }
+      if (!settled && batch.more !== true) {
+        settled = true;
+        if (self.logStart > 0) {
+          done();
+        } else {
+          self.loadHistory(gen).then(done, done);
         }
       }
-    } catch (e) {
-      this.store.setStatus("error", e && e.message ? e.message : String(e));
-    }
-    await this.loadHistory(gen);
-    if (gen === this.generation) {
-      this.schedule();
+    });
+  };
+
+  Agent.prototype.detach = function () {
+    this.attaching = null;
+    if (this.unsubscribe != null) {
+      this.unsubscribe();
+      this.unsubscribe = null;
     }
   };
 
+  // Stops listening for good, the daemon keeps running.
+  Agent.prototype.dispose = function () {
+    this.generation += 1;
+    this.detach();
+  };
+
+  // A stop while the daemon is starting is for that daemon: asked before it runs, the server would find nothing to stop.
   Agent.prototype.stop = async function (force) {
+    if (this.starting != null) {
+      await this.starting;
+    }
     if (this.sessionId == null) {
       return;
     }
-    await CC.host.cli("stop", { sessionId: this.sessionId, force: force === true });
-    this.kick(0);
+    await this.server.host.call("stop", { sessionId: this.sessionId, force: force === true });
   };
 
   Agent.prototype.restart = async function (opts) {
@@ -112,23 +190,36 @@ CC.Agent = (function () {
     const same = o.sessionId == null || o.sessionId === this.sessionId;
     const prev = this.sessionId;
     if (prev != null && this.store.status !== "stopped") {
-      await CC.host.cli("stop", { sessionId: prev });
+      await this.server.host.call("stop", { sessionId: prev });
       if (same) {
-        await this.waitStopped(prev);
+        await this.waitStopped();
       }
     }
     return this.start({ sessionId: o.sessionId || prev, resume: o.resume !== false, forkSession: o.forkSession, cwd: o.cwd, model: o.model, effort: o.effort, permissionMode: o.permissionMode,
       addDirs: o.addDirs });
   };
 
-  Agent.prototype.waitStopped = async function (sid) {
-    for (let i = 0; i < 120; i++) {
-      const st = await CC.host.cli("state", { sessionId: sid });
-      if (st.status === "stopped") {
+  // The state arrives through the Hub. After the wait the caller goes on regardless, and `start` says if the daemon still runs.
+  Agent.prototype.waitStopped = function () {
+    const store = this.store;
+    return new Promise(function (resolve) {
+      if (store.status === "stopped") {
+        resolve();
         return;
       }
-      await util.sleep(500);
-    }
+      let timer = null;
+      const off = store.on("state", function () {
+        if (store.status === "stopped") {
+          clearTimeout(timer);
+          off();
+          resolve();
+        }
+      });
+      timer = setTimeout(function () {
+        off();
+        resolve();
+      }, Agent.STOP_WAIT_MS);
+    });
   };
 
   // --- commands ---
@@ -137,14 +228,14 @@ CC.Agent = (function () {
     const body = { sessionId: this.sessionId, text: text, images: images || [], clientId: clientId };
     const json = JSON.stringify(body);
     if (json.length <= CHUNK_AT) {
-      return CC.host.cli("send", body);
+      return this.server.host.call("send", body);
     }
     const data = JSON.stringify({ text: text, images: images || [], clientId: clientId });
     const total = Math.ceil(data.length / CHUNK);
     const chunkId = util.uid();
     let res = null;
     for (let i = 0; i < total; i++) {
-      res = await CC.host.cli("sendChunk", { sessionId: this.sessionId, chunkId: chunkId, index: i, total: total, data: data.slice(i * CHUNK, (i + 1) * CHUNK) });
+      res = await this.server.host.call("sendChunk", { sessionId: this.sessionId, chunkId: chunkId, index: i, total: total, data: data.slice(i * CHUNK, (i + 1) * CHUNK) });
     }
     return res;
   };
@@ -155,21 +246,35 @@ CC.Agent = (function () {
     this.store.removePending(function (p) {
       return p.requestId === requestId;
     });
-    return CC.host.cli("respond", body);
+    return this.server.host.call("respond", body);
   };
 
   Agent.prototype.interrupt = function () {
-    return CC.host.cli("interrupt", { sessionId: this.sessionId });
+    return this.server.host.call("interrupt", { sessionId: this.sessionId });
   };
 
   Agent.prototype.control = async function (subtype, payload) {
     const self = this;
-    const res = await CC.host.cli("control", Object.assign({ sessionId: this.sessionId, subtype: subtype }, payload || {}));
+    this.controlsSending += 1;
+    let res;
+    try {
+      res = await this.server.host.call("control", Object.assign({ sessionId: this.sessionId, subtype: subtype }, payload || {}));
+    } finally {
+      this.controlsSending -= 1;
+    }
+    const early = Object.prototype.hasOwnProperty.call(this.controlsEarly, res.id);
+    const response = this.controlsEarly[res.id];
+    if (this.controlsSending === 0) {
+      this.controlsEarly = {};
+    }
+    if (early) {
+      return response;
+    }
     return new Promise(function (resolve, reject) {
       const timer = setTimeout(function () {
         delete self.controls[res.id];
         reject(new Error("control " + subtype + " timed out"));
-      }, CONTROL_TIMEOUT_MS);
+      }, Agent.CONTROL_TIMEOUT_MS);
       self.controls[res.id] = { resolve: resolve, timer: timer };
     });
   };
@@ -231,7 +336,7 @@ CC.Agent = (function () {
     for (let i = 0; i < 4; i++) {
       let res;
       try {
-        res = await CC.host.reader("older", { file: this.file, before: before });
+        res = await this.server.host.call("older", { file: this.file, before: before, leaf: this.store.meta.forkAt });
       } catch (e) {
         this.olderStart = 0;
         this.store.setHasOlder(false);
@@ -255,35 +360,66 @@ CC.Agent = (function () {
     this.store.setHasOlder(this.olderStart > 0);
   };
 
+  // The rest of the log, page by page. A page can hold nothing to show, and at the log's start the transcript's history follows.
+  Agent.prototype.loadLogOlder = async function () {
+    const gen = this.generation;
+    let found = false;
+    while (!found && this.logStart > 0) {
+      const res = await this.server.host.call("logOlder", { sessionId: this.sessionId, before: this.logStart });
+      if (gen !== this.generation) {
+        return;
+      }
+      this.logStart = res.start || 0;
+      const items = this.events.olderPage(res.carry, res.events);
+      found = items.length > 0;
+      if (found) {
+        this.store.prepend(items);
+      }
+    }
+    if (this.logStart > 0) {
+      this.store.setHasOlder(true);
+    } else {
+      await this.loadHistory(gen);
+    }
+  };
+
   Agent.prototype.loadOlder = async function () {
+    if (this.logStart > 0) {
+      return this.loadLogOlder();
+    }
     if (this.file == null || this.olderStart <= 0) {
       return;
     }
-    const res = await CC.host.reader("older", { file: this.file, before: this.olderStart });
+    const res = await this.server.host.call("older", { file: this.file, before: this.olderStart, leaf: this.store.meta.forkAt });
     this.olderStart = res.start || 0;
     this.historyMeta(res.meta);
     CC.adapters.transcript.prepend(this.store, this.olderItems(res.items));
     this.store.setHasOlder(this.olderStart > 0);
   };
 
-  // --- event loop ---
+  // --- events ---
 
-  Agent.prototype.apply = function (res) {
+  Agent.prototype.noteFirstStart = function (envelopes) {
     const self = this;
-    (res.events || []).forEach(function (env) {
+    (envelopes || []).forEach(function (env) {
       if (self.firstStartTs == null && env.ev != null && env.ev.type === "daemon" && env.ev.subtype === "started") {
         self.firstStartTs = env.ts;
       }
     });
+  };
+
+  Agent.prototype.apply = function (res) {
+    const self = this;
+    this.noteFirstStart(res.events);
     this.events.feed(res.events || []);
-    const st = res.state;
-    if (st != null) {
+    if (res.state != null) {
+      const st = Object.assign({}, res.state);
       if (Array.isArray(st.pending)) {
         st.pending = st.pending.filter(function (p) {
           return self.answered[p.requestId] !== true;
         });
         Object.keys(this.answered).forEach(function (id) {
-          if (!st.pending.some(function (p) {
+          if (!res.state.pending.some(function (p) {
             return p.requestId === id;
           })) {
             delete self.answered[id];
@@ -291,112 +427,13 @@ CC.Agent = (function () {
         });
       }
       this.events.state(st);
-      this.stateVersion = Math.max(this.stateVersion, st.version || 0);
     }
-    if (res.topicAt != null) {
-      this.topicAt = res.topicAt;
-      if (res.topic && res.topic !== this.store.meta.topic) {
-        this.store.setMeta({ topic: res.topic });
-      }
+    if (res.topic && res.topic !== this.store.meta.topic) {
+      this.store.setMeta({ topic: res.topic });
     }
   };
 
-  Agent.prototype.kick = function (delay) {
-    const self = this;
-    clearTimeout(this.timer);
-    if (this.waiting != null) {
-      const job = this.waiting;
-      this.waiting = null;
-      job.cancel();
-    }
-    if (!this.running) {
-      return;
-    }
-    this.timer = setTimeout(function () {
-      self.poll();
-    }, delay == null ? 0 : delay);
-  };
-
-  Agent.prototype.stopLoop = function () {
-    this.running = false;
-    clearTimeout(this.timer);
-    if (this.waiting != null) {
-      const job = this.waiting;
-      this.waiting = null;
-      job.cancel();
-    }
-  };
-
-  Agent.prototype.schedule = function () {
-    if (!this.running) {
-      return;
-    }
-    if (this.store.status === "stopped") {
-      this.kick(15000);
-      return;
-    }
-    if (Date.now() - this.waitFailedAt > 60000) {
-      this.wait();
-      return;
-    }
-    this.kick(this.store.status === "busy" || this.store.status === "waiting" ? 700 : 1500);
-  };
-
-  Agent.prototype.wait = async function () {
-    const gen = this.generation;
-    const job = CC.host.cliJob("wait", { sessionId: this.sessionId, after: this.events.lastSeq, stateVersion: this.stateVersion, topicAt: this.topicAt || 0, timeoutMs: 25000 });
-    this.waiting = job;
-    let res = null;
-    try {
-      res = await job.result;
-    } catch (e) {
-      if (this.waiting === job) {
-        this.waitFailedAt = Date.now();
-        console.warn("wait failed, polling instead", e && e.message);
-      }
-    }
-    if (this.waiting !== job || gen !== this.generation) {
-      return;
-    }
-    this.waiting = null;
-    if (res != null) {
-      this.apply(res);
-      if (res.more === true) {
-        this.kick(0);
-        return;
-      }
-    }
-    this.schedule();
-  };
-
-  Agent.prototype.poll = async function () {
-    if (this.busy || !this.running) {
-      return;
-    }
-    const gen = this.generation;
-    this.busy = true;
-    let more = false;
-    try {
-      const res = await CC.host.cli("events", { sessionId: this.sessionId, after: this.events.lastSeq, limit: 500 });
-      if (gen !== this.generation) {
-        return;
-      }
-      this.apply(res);
-      more = res.more === true;
-    } catch (e) {
-      console.error(e && e.message ? e.message : e);
-      this.store.setStatus("error", e && e.message ? e.message : String(e));
-    } finally {
-      this.busy = false;
-      if (gen === this.generation) {
-        if (more) {
-          this.kick(0);
-        } else {
-          this.schedule();
-        }
-      }
-    }
-  };
-
+  Agent.CONTROL_TIMEOUT_MS = CONTROL_TIMEOUT_MS;
+  Agent.STOP_WAIT_MS = STOP_WAIT_MS;
   return Agent;
 })();

@@ -1,0 +1,53 @@
+.cc-shell { display: flex; height: 100%; }
+.cc-shell.is-resizing, .cc-shell.is-resizing * { cursor: col-resize; user-select: none; -webkit-user-select: none; }
+
+/* The edge of a side: takes no room of its own; the hit area is wider than the line it lights up. */
+.cc-resize { flex: none; width: 0; position: relative; z-index: 5; }
+.cc-resize[hidden], .cc-shell.no-sidebar .cc-resize-sidebar { display: none; }
+.cc-resize::before { content: ""; position: absolute; top: 0; bottom: 0; left: -4px; width: 8px; cursor: col-resize; }
+.cc-resize::after { content: ""; position: absolute; top: 0; bottom: 0; left: -1px; width: 2px; background: var(--accent); opacity: 0; transition: opacity 0.12s; pointer-events: none; }
+.cc-resize:hover::after, .cc-resize:focus-visible::after, .cc-shell.is-resizing .cc-resize:active::after { opacity: 1; }
+.cc-resize:focus-visible { outline: none; }
+
+/* A saved width from a bigger window never squeezes the panes out. */
+.cc-sidebar { width: var(--sidebar-width); max-width: 40vw; flex: none; display: flex; flex-direction: column; min-height: 0; background: var(--side); border-right: 1px solid var(--line); }
+.cc-shell.no-sidebar .cc-sidebar { display: none; }
+
+.cc-main { flex: 1; min-width: 0; display: flex; position: relative; }
+.cc-panes { flex: 1; min-width: 0; display: flex; overflow-x: auto; }
+.cc-pane { flex: 1 1 0; min-width: 300px; position: relative; display: flex; flex-direction: column; border-right: 1px solid var(--line); }
+.cc-pane:last-child { border-right: 0; }
+.cc-resize-pane { position: absolute; top: 0; bottom: 0; left: 0; }
+.cc-pane:first-child > .cc-resize-pane { display: none; }
+.cc-panes.is-many .cc-pane:not(.is-focused) .cc-pane-title { color: var(--muted); }
+.cc-pane-body { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+.cc-empty { padding: 40px 22px; color: var(--muted); text-align: center; }
+.cc-moved { height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 22px; color: var(--muted); text-align: center; }
+.cc-empty-panes { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+.cc-empty-panes[hidden] { display: none; }
+.cc-empty-bar { position: absolute; top: 0; left: 0; right: 0; z-index: 1; }
+.cc-empty-bar[hidden] { display: none; }
+
+/* Sidebar only: the sidebar takes the whole pane. The panes stay laid out, unseen, so nothing in them scrolls or reflows by leaving. */
+.cc-shell.is-sidebar-only .cc-sidebar { flex: 1; width: auto; max-width: none; border-right: 0; }
+.cc-shell.is-sidebar-only .cc-resize-sidebar { display: none; }
+.cc-shell.is-sidebar-only .cc-main { position: fixed; top: 0; bottom: 0; left: 0; width: max(300px, calc(100vw - var(--sidebar-width))); visibility: hidden; }
+
+.cc-rail { width: var(--rail-width); max-width: 40vw; flex: none; display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--line); font-size: 13px; }
+.cc-rail-cards { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 8px 12px; }
+.cc-rail[hidden] { display: none; }
+
+/* Chat frame */
+.cc-chat { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+.cc-chat-scroll { flex: 1; min-height: 0; overflow-y: auto; }
+.cc-chat-column { width: 100%; max-width: var(--flow-width); margin: 0 auto; padding: 14px 22px 22px; }
+.cc-chat-bottom { flex: none; padding: 0 22px 10px; }
+.cc-slot-belowComposer { display: flex; align-items: center; gap: 8px; padding-top: 5px; }
+.cc-slot-belowComposer > .cc-slot-item { display: flex; align-items: center; }
+.cc-slot-belowComposer > .cc-slot-item:first-child { flex: 1; min-width: 0; }
+.cc-slot-overlay { position: absolute; inset: 0; pointer-events: none; }
+.cc-slot-overlay > .cc-slot-item > * { pointer-events: auto; }
+
+/* The rail needs room; below this the chat keeps the width. */
+@media (max-width: 1080px) { .cc-rail, .cc-rail-toggle, .cc-resize-rail { display: none; } }
+@media (prefers-reduced-motion: reduce) { .cc-resize::after { transition: none; } }

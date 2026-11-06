@@ -1,7 +1,23 @@
 # Changelog
 
-## Unreleased
+## 3.0.0
 
+One Muxy tab is the whole app now: chats sidebar, conversations side by side and a details rail, on one page with one state.
+
+- **One page**: up to three panes (chat, Review, file, plan, tasks, pins, subagent transcript) with draggable dividers. A chat is a row in our sidebar, not a Muxy tab. The rail shows environment, tasks, context by category, changes and agents.
+- **Sidebar**: server → project → chat, by project or by state, filters, needs-you pill, Allow once on the row, child rows for forks and subagents. Other servers' chats show under their server.
+- **Conversation**: tool work as a summary line, intent rows, then detail in place; view modes Normal, Thinking, Verbose; question and permission cards in the flow; edited files card; find; `/btw` with follow-ups.
+- **Works anywhere**: no installer and no config. The app installs its server package per server, in a folder per version, without touching running daemons. Without Claude Code, Local shows projects and terminals; a remote gets a terminal.
+- **Settings are per server**, in kv on the server. The first run on each server imports what 2.x saved (typography, notifications, sidebar options, default mode, Review options, project order, that server's pins and drafts). Values already set stay.
+- **ticket-board** starts chats through the new `request` op.
+- **Changed**: New Chat is `Cmd+Shift+T`. 2.x's open tabs say where their chat went. `server/setup.py` and `host/install.sh` no longer install the package; they're for the open-file bridge, the statusline wrapper and registering from a checkout.
+- **Removed**: the 2.x extension (background script, page relay, tab index, rescan, title warmup, tab icons, narrow mode, Muxy sidebar), the git row, the minimap, Ticket Board button, server groups' Move to Remote / Local, reader `bind` and `poll {sid}`.
+- **Not carried over from 2.x**: queued messages, per-tab Review comments, chats in terminal mode (the terminal stays, adopt it).
+
+## 2.x, unreleased at the end of its life
+
+- Review: checkout picker (main + every git worktree) next to the source picker;
+  defaults to the checkout of the conversation's last edit. Comments stay per checkout.
 - Code color scheme (Settings → Typography → Code): Muxy theme (default, tokens derived from the muxy theme), IntelliJ
   or Material One Dark, shared by code blocks in the chat and the Review diff.
 - Clicking an http(s) link offers Open in Muxy browser (a muxy browser tab), Open in default browser (the Mac's,

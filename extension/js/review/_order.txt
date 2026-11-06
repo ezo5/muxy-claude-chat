@@ -1,0 +1,12 @@
+icons.js
+note.js
+diff.js
+sources.js
+drafts.js
+find.js
+view.js
+list.js
+lines.js
+comments.js
+pane.js
+file-pane.js

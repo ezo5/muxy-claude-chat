@@ -1,13 +1,4 @@
-try {
-  const project = muxy.projects.list().find(p => p.isActive);
-  if (project == null) {
-    muxy.notifications.notify({ title: "Claude Chat", body: "No active project" });
-  } else {
-    muxy.tabs.open({
-      kind: "extensionWebView",
-      extension: { id: "claude-chat", tabType: "chat", data: { newSession: true, projectId: project.id, directory: project.path } },
-    });
-  }
-} catch (e) {
-  muxy.notifications.notify({ title: "Claude Chat: New Chat failed", body: String(e && e.message ? e.message : e) });
-}
+// New Chat, also with no page yet: the same choice as the top bar icon, and the page starts the chat. `shortcut`: the page prefers the project selected in its sidebar, which a script can't see.
+
+const project = activeProject();
+appOrTerminal(project, { kind: "new", cwd: project != null ? project.path : null, shortcut: true });

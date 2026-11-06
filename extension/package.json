@@ -1,63 +1,63 @@
 {
+  "$schema": "https://raw.githubusercontent.com/muxy-app/muxy/main/docs/extensions/schema/manifest.schema.json",
   "name": "claude-chat",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "scripts": {
-    "build": "python3 build.py"
+    "build": "python3 build.py --no-sample"
   },
   "muxy": {
-    "description": "Chat UI for Claude Code: runs claude -p as a managed agent per tab, or mirrors a Claude running in a terminal pane",
+    "description": "Chat with Claude Code in one tab: chats sidebar, conversations side by side, and a details rail",
     "permissions": [
+      "tabs:write",
       "panes:read",
       "panes:write",
-      "tabs:read",
-      "tabs:write",
-      "commands:exec",
-      "commands:run-script",
+      "projects:read",
+      "projects:write",
+      "projects:delete",
+      "agents:read",
+      "files:read",
       "notifications:write",
       "storage:read",
       "storage:write",
-      "projects:read",
-      "panels:write"
+      "commands:exec",
+      "commands:run-script"
     ],
-    "background": "background.js",
     "events": [
       "tab.closed",
-      "project.switched"
+      "pane.created",
+      "pane.closed",
+      "pane.focused",
+      "projects.changed",
+      "agent.status"
     ],
     "commands": [
-      {
-        "id": "open-tab",
-        "title": "Claude Chat: Open Tab for Focused Pane",
-        "action": {
-          "kind": "runScript",
-          "script": "scripts/open-chat-tab.js"
-        },
-        "defaultShortcut": "ctrl+opt+c"
-      },
-      {
-        "id": "new-chat",
-        "title": "Claude Chat: New Chat",
-        "action": {
-          "kind": "runScript",
-          "script": "scripts/new-chat.js"
-        },
-        "defaultShortcut": "cmd+shift+n"
-      }
+      { "id": "open", "title": "Claude Chat: Open", "action": { "kind": "runScript", "script": "scripts/open.js" } },
+      { "id": "new-chat", "title": "Claude Chat: New Chat", "action": { "kind": "runScript", "script": "scripts/new-chat.js" }, "defaultShortcut": "cmd+shift+t" },
+      { "id": "adopt", "title": "Claude Chat: Adopt Focused Terminal", "action": { "kind": "runScript", "script": "scripts/adopt.js" }, "defaultShortcut": "ctrl+opt+c" },
+      { "id": "next-chat", "title": "Claude Chat: Next Chat", "action": { "kind": "event" }, "defaultShortcut": "cmd+}" },
+      { "id": "prev-chat", "title": "Claude Chat: Previous Chat", "action": { "kind": "event" }, "defaultShortcut": "cmd+{" },
+      { "id": "last-chat", "title": "Claude Chat: Last Used Chat", "action": { "kind": "event" }, "defaultShortcut": "cmd+e" },
+      { "id": "chat-1", "title": "Claude Chat: Go to Chat 1", "action": { "kind": "event" }, "defaultShortcut": "cmd+1" },
+      { "id": "chat-2", "title": "Claude Chat: Go to Chat 2", "action": { "kind": "event" }, "defaultShortcut": "cmd+2" },
+      { "id": "chat-3", "title": "Claude Chat: Go to Chat 3", "action": { "kind": "event" }, "defaultShortcut": "cmd+3" },
+      { "id": "chat-4", "title": "Claude Chat: Go to Chat 4", "action": { "kind": "event" }, "defaultShortcut": "cmd+4" },
+      { "id": "chat-5", "title": "Claude Chat: Go to Chat 5", "action": { "kind": "event" }, "defaultShortcut": "cmd+5" },
+      { "id": "chat-6", "title": "Claude Chat: Go to Chat 6", "action": { "kind": "event" }, "defaultShortcut": "cmd+6" },
+      { "id": "chat-7", "title": "Claude Chat: Go to Chat 7", "action": { "kind": "event" }, "defaultShortcut": "cmd+7" },
+      { "id": "chat-8", "title": "Claude Chat: Go to Chat 8", "action": { "kind": "event" }, "defaultShortcut": "cmd+8" },
+      { "id": "chat-9", "title": "Claude Chat: Go to Chat 9", "action": { "kind": "event" }, "defaultShortcut": "cmd+9" }
     ],
     "topbarItems": [
-      {
-        "id": "chat",
-        "icon": "bubble.left.and.bubble.right",
-        "command": "open-tab",
-        "tooltip": "Claude Chat"
-      }
+      { "id": "open", "icon": { "svg": "assets/icon.svg" }, "command": "open", "tooltip": "Claude Chat" }
     ],
     "tabTypes": [
-      {
-        "id": "chat",
-        "title": "Claude Chat",
-        "entry": "panel.html"
-      }
-    ]
+      { "id": "app", "title": "Claude Chat", "entry": "index.html" },
+      { "id": "chat", "title": "Claude Chat", "entry": "moved.html" }
+    ],
+    "marketplace": {
+      "categories": ["productivity"],
+      "icon": "assets/icon.svg",
+      "screenshots": ["assets/screenshot-1.png"]
+    }
   }
 }

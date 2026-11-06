@@ -1,4 +1,3 @@
-window.CC = window.CC || {};
 
 // Conversation model: the normalized items (user | text | thinking | tool | result | notice | turn), session state
 // and the derived data views need. No DOM; node tests load it with util.js.
@@ -80,6 +79,7 @@ CC.Store = (function () {
     this.index = new Map();
     this.results = new Map();
     this.lastSeq = 0;
+    this.todoSeed = null;
     if (silent !== true) {
       this.emit("reset");
     }
@@ -153,14 +153,25 @@ CC.Store = (function () {
     const added = this.fresh(items);
     if (added.length > 0) {
       this.items = added.concat(this.items);
+      if (this.todoSeed != null) {
+        this.todoSeed.before += added.length;
+      }
       this.emit("items:prepend", added);
     }
     return added;
   };
 
+  // The task list as it stood before the items loaded so far, for a chat opened from the end of its log: history loaded later is already in it.
+  Store.prototype.seedTodos = function (list) {
+    this.todoSeed = list != null ? { list: list, before: 0 } : null;
+  };
+
   // Keeps the items before `index` (a rewound conversation) and re-renders them.
   Store.prototype.truncate = function (index) {
     const kept = this.items.slice(0, Math.max(0, index));
+    if (this.todoSeed != null) {
+      this.todoSeed.before = Math.min(this.todoSeed.before, kept.length);
+    }
     this.index = new Map();
     this.results = new Map();
     kept.forEach(this.register, this);
@@ -243,9 +254,10 @@ CC.Store = (function () {
   // The main agent's task list since the last /clear: TodoWrite snapshots (older models) or the TaskCreate /
   // TaskUpdate / TaskList tools, whose ids and list only appear in the result text (same in stream and transcript).
   Store.prototype.todos = function () {
-    let list = null;
+    const seed = this.todoSeed;
+    let list = seed != null ? seed.list : null;
     const self = this;
-    this.items.forEach(function (it) {
+    (seed != null ? this.items.slice(seed.before) : this.items).forEach(function (it) {
       if (it.k === "user" && it.command === true && CLEAR_RE.test(it.text)) {
         list = null;
       }
@@ -375,6 +387,7 @@ CC.Store = (function () {
       ms: turn != null && turn.ms ? turn.ms : !isNaN(start) && end > start ? end - start : null,
       tokens: turn != null && turn.tokens > 0 ? turn.tokens : sum > 0 ? sum : null,
       end: isNaN(end) ? null : end,
+      spend: turn != null ? turn.spend || null : null,
     };
   };
 
@@ -383,10 +396,24 @@ CC.Store = (function () {
     if (stats.ms > 0) {
       parts.push(CC.util.fmtDuration(stats.ms));
     }
-    if (stats.tokens > 0) {
+    const sp = stats.spend;
+    if (sp != null) {
+      const input = sp.input + sp.cacheWrite + sp.cacheRead;
+      parts.push(CC.util.fmtCost(sp.cost), CC.util.fmtTokens(input) + " in (" + CC.util.fmtTokens(sp.cacheRead) + " cached)", CC.util.fmtTokens(sp.output) + " out");
+    } else if (stats.tokens > 0) {
       parts.push(CC.util.fmtTokens(stats.tokens) + " tokens");
     }
     return parts.join(" · ");
+  };
+
+  // Per model: cost, input (cache read / write), output of a turn's daemon `spend`.
+  Store.prototype.spendTitle = function (sp) {
+    const t = CC.util.fmtTokens;
+    return Object.keys(sp.models || {}).map(function (m) {
+      const d = sp.models[m];
+      return m + ": " + CC.util.fmtCost(d.cost) + " · " + t(d.input + d.cacheWrite + d.cacheRead) + " in (" + t(d.cacheRead) + " cache read, "
+        + t(d.cacheWrite) + " cache write) · " + t(d.output) + " out";
+    }).join("\n");
   };
 
   // Files changed by the main thread's Edit / MultiEdit / Write / NotebookEdit items, from their results' patches (a
@@ -430,6 +457,35 @@ CC.Store = (function () {
       });
     });
     return files;
+  };
+
+  // Files the main thread wrote in `items`: editedFiles with their counts, plus edits without a patch (NotebookEdit,
+  // older transcripts) by path; `bash` = a Bash call may have written more.
+  Store.prototype.writtenFiles = function (items) {
+    const self = this;
+    const files = this.editedFiles(items).map(function (f) {
+      return { path: f.path, status: f.status, add: f.add, del: f.del, patch: true };
+    });
+    const seen = {};
+    files.forEach(function (f) {
+      seen[f.path] = true;
+    });
+    let bash = false;
+    items.forEach(function (it) {
+      if (it.k !== "tool" || it.agent != null) {
+        return;
+      }
+      bash = bash || it.name === "Bash";
+      const input = it.input || {};
+      const path = input.file_path || input.notebook_path;
+      const r = EDIT_TOOLS[it.name] === true ? self.resultOf(it.id) : null;
+      if (r == null || r.err || !path || seen[path]) {
+        return;
+      }
+      seen[path] = true;
+      files.push({ path: path, status: it.name === "Write" ? "added" : "modified", add: null, del: null, patch: false });
+    });
+    return { files: files, bash: bash };
   };
 
   // Assistant turns with their step groups, the same grouping the renderer uses: consecutive steps form one
@@ -488,6 +544,34 @@ CC.Store = (function () {
       });
     });
     return turns;
+  };
+
+  // What the main thread of the running turn does now: a tool waiting for its result, else a tool input still
+  // streaming, else thinking.
+  Store.prototype.activity = function () {
+    let draft = null;
+    let thinking = null;
+    for (let i = this.items.length - 1; i >= 0; i--) {
+      const it = this.items[i];
+      if (it.agent != null) {
+        continue;
+      }
+      if (it.k === "user" || it.k === "turn") {
+        break;
+      }
+      if (it.k === "tool" && it.partial !== true && this.resultOf(it.id) == null) {
+        return { kind: "tool", item: it };
+      }
+      if (it.k === "text" && it.partial === true && draft == null && thinking == null) {
+        return null;
+      }
+      if (it.k === "tool" && it.partial === true && draft == null) {
+        draft = it;
+      } else if (it.k === "thinking" && it.partial === true && thinking == null) {
+        thinking = it;
+      }
+    }
+    return draft != null ? { kind: "draft", item: draft } : thinking != null ? { kind: "thinking", item: thinking } : null;
   };
 
   Store.stepKind = stepKind;

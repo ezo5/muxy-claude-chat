@@ -1,0 +1,110 @@
+/* Sample content only, loaded with the sample. Real surfaces bring their own css. The look is the accepted first draft. */
+.sm-grow { flex: 1; min-width: 0; }
+.sm-grey { color: var(--muted); }
+.sm-label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sm-wide { display: block; width: 100%; margin-top: 8px; }
+
+/* Sidebar */
+.sm-side-top { display: flex; align-items: center; gap: 4px; padding: 10px 10px 6px; }
+.sm-new { flex: 1; display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--radius); font-weight: 500; }
+.sm-new:hover { background: var(--hover); }
+.sm-side-view { display: flex; gap: 2px; margin: 2px 10px 8px; padding: 2px; border-radius: var(--radius); background: var(--surface); font-size: 12px; }
+.sm-side-view button { flex: 1; text-align: center; padding: 2px 0; border-radius: var(--radius-small); color: var(--muted); }
+.sm-side-view button.is-on { background: var(--bg); color: var(--fg); }
+.sm-tree { flex: 1; min-height: 0; overflow-y: auto; padding: 0 6px 12px; }
+.sm-group { display: flex; align-items: baseline; gap: 6px; padding: 12px 8px 4px; font-size: 12px; color: var(--muted); }
+.sm-group b { font-weight: 400; opacity: 0.7; }
+.sm-side-foot { padding: 8px 12px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+
+/* Conversation */
+.sm-prompt-wrap { display: flex; flex-direction: column; align-items: flex-end; margin: 22px 0 14px; }
+.sm-prompt-wrap:first-child { margin-top: 4px; }
+.sm-prompt { max-width: 82%; padding: 8px 13px; border-radius: var(--radius-big); background: var(--bubble); white-space: pre-wrap; }
+.sm-prompt-acts { display: flex; align-items: center; gap: 2px; height: 26px; opacity: 0; color: var(--muted); font-size: 12px; }
+.sm-prompt-wrap:hover .sm-prompt-acts, .sm-prompt-acts:focus-within { opacity: 1; }
+.sm-prompt-acts .cc-icon-btn { width: 24px; height: 24px; }
+.sm-prompt-acts > span { margin-right: 6px; }
+.sm-text { margin: 10px 0; }
+.sm-text p { margin: 0 0 10px; }
+.sm-text p:last-child { margin-bottom: 0; }
+.sm-text code { font-size: 12.5px; line-height: 1.5; padding: 1px 5px; border-radius: 5px; background: var(--surface); }
+.cc-slot-flow .cc-disclosure { margin: 6px 0; }
+
+.sm-log { margin: 4px 0 10px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.sm-log-item + .sm-log-item { border-top: 1px solid var(--line); }
+.sm-log-row { width: 100%; display: flex; align-items: center; gap: 8px; padding: 6px 12px; font-size: 13px; color: var(--muted); }
+.sm-log-row:hover:not(:disabled) { background: var(--hover); }
+.sm-log-row:disabled { opacity: 1; }
+.sm-log-row b { font-weight: 500; color: var(--fg); }
+.sm-is-open > .sm-log-row > .cc-chev { transform: rotate(90deg); }
+.sm-failed { color: var(--del); font-size: 12px; }
+.sm-detail { padding: 0 12px 12px; }
+.sm-detail[hidden] { display: none; }
+.sm-path { font-size: 12px; color: var(--muted); margin-bottom: 6px; overflow-wrap: anywhere; }
+.sm-viewer { max-height: 230px; overflow: auto; border-radius: var(--radius); background: var(--well); font: 12px/1.6 var(--mono); padding: 8px 0; }
+.sm-ln { display: flex; min-width: max-content; padding-right: 12px; }
+.sm-ln i { width: 38px; padding-right: 12px; flex: none; text-align: right; font-style: normal; color: var(--muted); opacity: 0.6; user-select: none; }
+.sm-ln span { white-space: pre; }
+.sm-ln-add { background: color-mix(in srgb, var(--add) 14%, transparent); box-shadow: inset 2px 0 var(--add); }
+.sm-ln-del { background: color-mix(in srgb, var(--del) 14%, transparent); box-shadow: inset 2px 0 var(--del); }
+
+.sm-files, .sm-ask { margin: 12px 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.sm-files-head { display: flex; gap: 6px; padding: 7px 12px; font-size: 13px; }
+.sm-file { width: 100%; display: flex; gap: 8px; align-items: center; padding: 5px 12px; font-size: 13px; border-top: 1px solid var(--line); }
+.sm-file:hover { background: var(--hover); }
+
+.sm-tasks { margin-bottom: 8px; padding: 7px 12px; font-size: 13px; border: 1px solid var(--line); border-radius: 10px; }
+.sm-task { display: flex; align-items: center; gap: 9px; padding: 2px 0; }
+.sm-task.is-done { color: var(--muted); }
+.sm-pending { display: block; width: 12px; height: 12px; flex: none; border-radius: 50%; border: 1.5px dashed var(--muted); }
+
+.sm-live { display: flex; align-items: center; gap: 8px; margin: 10px 0; font-size: 13px; color: var(--muted); }
+.sm-secs { font-variant-numeric: tabular-nums; }
+.sm-turn-end { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
+
+.sm-ask { max-width: 560px; }
+.sm-ask-q { padding: 9px 13px; background: color-mix(in srgb, var(--need) 11%, transparent); font-weight: 500; }
+.sm-ask pre { margin: 8px 13px; padding: 8px 10px; border-radius: var(--radius); background: var(--well); font-size: 12px; line-height: 1.5; white-space: pre-wrap; }
+.sm-opt { width: 100%; display: flex; gap: 10px; padding: 8px 13px; border-top: 1px solid var(--line); }
+.sm-opt:hover { background: var(--hover); }
+.sm-opt i { font-style: normal; color: var(--muted); font-variant-numeric: tabular-nums; }
+.sm-opt small { display: block; font-size: 12.5px; color: var(--muted); }
+.sm-answered { margin: 12px 0; padding: 8px 0 8px 13px; border-left: 2px solid var(--line); font-size: 13.5px; }
+.sm-answered span { display: block; color: var(--muted); }
+
+/* Composer */
+.sm-git-row { display: flex; align-items: center; gap: 8px; padding: 0 4px 6px; font-size: 12.5px; color: var(--muted); }
+.sm-git-row .sm-grow { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sm-field { display: flex; align-items: flex-end; gap: 6px; padding: 8px 8px 8px 14px; border: 1px solid var(--border); border-radius: var(--radius-big); background: var(--surface-solid); }
+.sm-field:focus-within { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+.sm-field textarea { flex: 1; min-width: 0; height: 28px; max-height: 160px; resize: none; border: 0; outline: 0; background: none; padding: 2px 0; }
+.sm-field textarea::placeholder { color: var(--muted); }
+.sm-send { background: var(--accent); color: var(--accent-fg); border-radius: var(--radius); }
+.sm-send:hover { background: color-mix(in srgb, var(--accent) 88%, var(--fg)); color: var(--accent-fg); }
+.sm-under { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; padding: 0 4px; font-size: 12px; color: var(--muted); }
+.sm-under button { padding: 1px 6px; border-radius: var(--radius-small); }
+.sm-under button:hover { background: var(--hover); color: var(--fg); }
+.cc-slot-belowComposer .cc-ring { padding-right: 4px; }
+
+.sm-find { position: absolute; top: 6px; right: 14px; padding: 4px; border-radius: var(--radius); }
+.sm-find input { width: 220px; padding: 2px 6px; border: 0; outline: 0; background: none; font-size: 13px; }
+
+/* Rail */
+.sm-kv { display: flex; gap: 8px; padding: 2px 0; }
+.sm-kv span:first-child { color: var(--muted); width: 56px; flex: none; }
+.sm-kv span:last-child { min-width: 0; overflow-wrap: anywhere; }
+.sm-check { margin-top: 6px; font-size: 12px; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.sm-check:empty { display: none; }
+.sm-bar { display: flex; height: 5px; border-radius: 3px; overflow: hidden; background: var(--surface); margin: 3px 0 8px; }
+.sm-bar i { display: block; }
+.sm-legend { display: flex; gap: 7px; align-items: center; padding: 1px 0; color: var(--muted); }
+.sm-legend em { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+
+/* Review */
+.sm-pane-scroll { flex: 1; min-height: 0; overflow-y: auto; }
+.sm-diff-file { border-bottom: 1px solid var(--line); }
+.sm-diff-head { display: flex; align-items: center; gap: 8px; padding: 7px 14px; position: sticky; top: 0; background: var(--bg); font-size: 13px; }
+.sm-viewed { width: 15px; height: 15px; flex: none; border-radius: 50%; border: 1.5px solid var(--muted); display: inline-flex; align-items: center; justify-content: center; }
+.sm-viewed.is-on { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+.sm-diff-body { font: 12px/1.6 var(--mono); padding-bottom: 8px; overflow-x: auto; }
+.sm-diff-body[hidden] { display: none; }

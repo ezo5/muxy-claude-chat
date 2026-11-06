@@ -1,25 +1,58 @@
-window.CC = window.CC || {};
+// What's typed and not sent, in kv `session:<sid>/draft`, so it follows the chat to any pane and over a reload. The page also keeps it per
+// runtime: going back to a chat shows it at once, without waiting for the server. Text typed before the server answers wins over its draft.
+CC.Composer.use((function () {
+  const SAVE_MS = 500;
+  const known = new WeakMap();
 
-CC.Composer.use(function (composer) {
-  const key = "draft:" + CC.host.viewId();
-  let timer = null;
-  let loaded = false;
+  return function (composer) {
+    const rt = composer.runtime;
+    const scope = "session:" + rt.id;
+    let timer = null;
+    let restoring = false;
+    let dirty = false;
 
-  composer.on("input", function () {
-    if (!loaded) {
+    function save() {
+      clearTimeout(timer);
+      dirty = false;
+      const value = composer.value();
+      Promise.resolve(value !== "" ? CC.Servers.of(rt).host.kv.set(scope, "draft", value) : CC.Servers.of(rt).host.kv.del(scope, "draft")).catch(function (e) {
+        console.warn("draft not saved", e && e.message);
+      });
+    }
+
+    function restore(text) {
+      restoring = true;
+      composer.setValue(text);
+      restoring = false;
+    }
+
+    composer.on("input", function () {
+      if (!restoring) {
+        known.set(rt, composer.value());
+        dirty = true;
+        clearTimeout(timer);
+        timer = setTimeout(save, SAVE_MS);
+      }
       return false;
-    }
-    clearTimeout(timer);
-    timer = setTimeout(function () {
-      CC.host.storageSet(key, composer.value() || null);
-    }, 500);
-    return false;
-  });
+    });
 
-  CC.host.storageGet(key).then(function (draft) {
-    if (typeof draft === "string" && draft !== "" && composer.value() === "") {
-      composer.setValue(draft);
+    composer.onDispose(function () {
+      if (dirty) {
+        save();
+      }
+    });
+
+    if (known.has(rt)) {
+      restore(known.get(rt));
+      return;
     }
-    loaded = true;
-  });
-});
+    Promise.resolve(CC.Servers.of(rt).host.kv.get(scope, "draft")).then(function (draft) {
+      if (!composer.disposed && !known.has(rt) && typeof draft === "string" && draft !== "") {
+        known.set(rt, draft);
+        restore(draft);
+      }
+    }).catch(function (e) {
+      console.warn("draft not loaded", e && e.message);
+    });
+  };
+})());

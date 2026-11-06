@@ -1,5 +1,4 @@
-window.CC = window.CC || {};
-
+// `/` completion: the CLI's list once it arrives, skills included; the static list until then.
 CC.BUILTIN_COMMANDS = [
   ["clear", "Start a new conversation (clear history)"],
   ["compact", "Compact the conversation, optionally with focus instructions", "[instructions]"],
@@ -34,6 +33,7 @@ CC.BUILTIN_COMMANDS = [
   ["ide", "Connect to an IDE", "", true],
   ["doctor", "Diagnose the installation and run the health check", "", true],
   ["release-notes", "Show release notes", "", true],
+  ["btw", "Ask a side question without adding it to the conversation", "<question>", true],
   ["help", "Show help", "", true],
   ["exit", "Stop Claude in this chat"],
   ["quit", "Stop Claude in this chat"],
@@ -43,11 +43,10 @@ CC.BUILTIN_COMMANDS = [
 
 CC.Composer.use(function (composer) {
   const owner = { name: "slash" };
+  const PICKERS = { resume: true, model: true, effort: true };
   composer.commands = [];
 
-  const PICKERS = { resume: true, model: true, effort: true };
-
-  // Answered in the chat (pickers, CC.Commands) rather than by the CLI.
+  // Answered in the chat rather than by the CLI.
   function local(name) {
     return PICKERS[name] === true || name === "exit" || name === "quit" || CC.Commands.has(name);
   }
@@ -58,7 +57,6 @@ CC.Composer.use(function (composer) {
     });
   }
 
-  // The CLI's initialize reply lists its commands (skills included); the static list is the fallback before it arrives.
   function all() {
     const live = composer.meta.commands;
     if (Array.isArray(live) && live.length > 0) {
@@ -86,8 +84,7 @@ CC.Composer.use(function (composer) {
     if (n.indexOf(q) === 0) {
       return 100 - n.length / 100;
     }
-    const tail = n.split(":").pop();
-    if (tail.indexOf(q) === 0) {
+    if (n.split(":").pop().indexOf(q) === 0) {
       return 80 - n.length / 100;
     }
     if (n.indexOf(q) >= 0) {
@@ -100,25 +97,19 @@ CC.Composer.use(function (composer) {
     const v = composer.value();
     const caret = composer.input.selectionStart;
     const m = /^\/(\S*)$/.exec(v.slice(0, caret));
-    if (m == null || /\s/.test(v.slice(0, caret)) || (v.length > caret && !/^\s/.test(v.slice(caret)))) {
+    if (m == null || (v.length > caret && !/^\s/.test(v.slice(caret)))) {
       return null;
     }
     return m[1].toLowerCase();
   }
 
   function update(ev) {
-    if (ev != null && ev.programmatic === true) {
-      if (composer.popup.isOpen(owner)) {
-        composer.popup.close();
-      }
-      return false;
-    }
-    const q = token();
+    const q = ev != null && ev.programmatic === true ? null : token();
     if (q == null) {
       if (composer.popup.isOpen(owner)) {
         composer.popup.close();
       }
-      return;
+      return false;
     }
     const list = all().map(function (c) {
       return { c: c, s: score(c.name, q) };
@@ -136,17 +127,19 @@ CC.Composer.use(function (composer) {
       };
     });
     composer.popup.open(owner, list, { title: "Commands" });
+    return false;
   }
 
   // Only a required argument (`<path>`) keeps Enter as completion; `[name]` / `<optional …>` send right away.
+  // A command answered here, like a picker, asks for what it lacks itself.
   function needsArg(cmd) {
-    return /^</.test(cmd.hint || "") && !/optional/i.test(cmd.hint);
+    return cmd.picker !== true && cmd.local !== true && /^</.test(cmd.hint || "") && !/optional/i.test(cmd.hint);
   }
 
   owner.onPick = function (it, how) {
     const rest = composer.value().slice(composer.input.selectionStart).replace(/^\s+/, "");
     composer.setValue("/" + it.cmd.name + " " + rest);
-    if (how === "enter" && (!needsArg(it.cmd) || it.cmd.local) && rest === "") {
+    if (how === "enter" && !needsArg(it.cmd) && rest === "") {
       composer.setValue("/" + it.cmd.name);
       composer.submit(false);
     }

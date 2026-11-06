@@ -1,32 +1,22 @@
-window.CC = window.CC || {};
-
-// Chat ⇄ terminal mode of one chat tab (V2-PROPOSAL §4.3). DOM-free: everything goes through `ports`
-// (muxy tabs/panes/dialog, agent, mirror, storage), so dev/modes.test.cjs can run the transitions with fakes.
-//   chat ──toTerminal──▶ terminal (mirror)   : stop daemon, open a terminal tab running `claude --resume <id>; exit`
+// Chat ⇄ terminal mode of one chat. DOM-free: everything goes through `ports` (terminal, dialog, agent, mirror, storage), so
+// dev/tests/A3.modes.test.cjs can run the transitions with fakes.
+//   chat ──toTerminal──▶ terminal (mirror)   : stop daemon, open a terminal running `claude --resume <id>; exit`
 //   terminal ──toChat──▶ chat                : tuiExit (if running), daemon start --resume <newest id>
-//   adopt(pane) ─────────▶ terminal (mirror)   : Ctrl+Opt+C on a running TUI (bind, else tuiFind by cwd)
+//   adopt(pane) ─────────▶ terminal (mirror) : a running TUI, found by the pane's folder
 CC.Modes = (function () {
   function quote(s) {
     return "'" + String(s).replace(/'/g, "'\\''") + "'";
   }
 
-  function relDir(project, cwd) {
-    if (!project || !cwd || cwd === project) {
-      return null;
-    }
-    return cwd.indexOf(project + "/") === 0 ? cwd.slice(project.length + 1) : null;
+  function shellWord(s) {
+    return /^[A-Za-z0-9_@%+=:,./-]+$/.test(String(s)) ? String(s) : quote(s);
   }
 
   function Modes(ports) {
     this.p = ports;
     this.state = { mode: "chat", terminalTabId: null, paneId: null, pid: null, cliSessionId: null, cwd: null, tuiSeen: false, tuiGone: false };
-    this.settings = { defaultMode: "chat", autoReturn: true };
     this.switching = null;
   }
-
-  Modes.prototype.key = function () {
-    return "mode:" + this.p.viewId();
-  };
 
   Modes.prototype.notify = function () {
     this.p.onChange(this.state, this.switching);
@@ -34,56 +24,48 @@ CC.Modes = (function () {
 
   Modes.prototype.persist = function () {
     const s = this.state;
-    return this.p.storageSet(this.key(), s.mode === "terminal"
-      ? { mode: "terminal", terminalTabId: s.terminalTabId, paneId: s.paneId, pid: s.pid, cliSessionId: s.cliSessionId, cwd: s.cwd }
-      : null);
+    if (s.mode !== "terminal") {
+      return this.p.storageSet(null);
+    }
+    const v = { mode: "terminal", terminalTabId: s.terminalTabId, paneId: s.paneId, pid: s.pid, cliSessionId: s.cliSessionId, cwd: s.cwd };
+    if (s.hooks != null) {
+      v.hooks = s.hooks;
+    }
+    return this.p.storageSet(v);
   };
 
-  Modes.prototype.loadSettings = async function () {
-    const mode = await this.p.storageGet("settings:defaultMode");
-    const auto = await this.p.storageGet("settings:autoReturn");
-    this.settings.defaultMode = mode === "terminal" ? "terminal" : "chat";
-    this.settings.autoReturn = auto !== false;
-    return this.settings;
-  };
-
-  Modes.prototype.saveSettings = async function (patch) {
-    Object.assign(this.settings, patch || {});
-    await this.p.storageSet("settings:defaultMode", this.settings.defaultMode);
-    await this.p.storageSet("settings:autoReturn", this.settings.autoReturn);
-  };
-
-  // A tab reopened in terminal mode goes straight back to the mirror; the TUI may or may not still run.
+  // A chat reopened in terminal mode goes straight back to the mirror; the TUI may or may not still run.
   Modes.prototype.restore = async function () {
-    const stored = await this.p.storageGet(this.key());
+    const stored = await this.p.storageGet();
     if (stored == null || stored.mode !== "terminal") {
       return false;
     }
     this.enterMirror({ terminalTabId: stored.terminalTabId || null, paneId: stored.paneId || null, pid: stored.pid || null,
-      cliSessionId: stored.cliSessionId || null, cwd: stored.cwd || this.p.cwd(), tuiSeen: stored.pid != null });
+      cliSessionId: stored.cliSessionId || null, cwd: stored.cwd || this.p.cwd(), tuiSeen: stored.pid != null, hooks: stored.hooks || null });
     return true;
   };
 
   Modes.prototype.enterMirror = function (fields) {
     this.state = Object.assign({ mode: "terminal", tuiSeen: false, tuiGone: false }, fields);
     this.persist();
-    this.p.mirrorStart({ cwd: this.state.cwd, cliSessionId: this.state.cliSessionId, pid: this.state.pid });
+    const opts = { cwd: this.state.cwd, cliSessionId: this.state.cliSessionId, pid: this.state.pid };
+    if (this.state.hooks != null) {
+      opts.hooks = this.state.hooks;
+    }
+    this.p.mirrorStart(opts);
     this.notify();
   };
 
-  Modes.prototype.newPane = async function (before) {
-    const until = Date.now() + Modes.PANE_WAIT_MS;
-    while (Date.now() < until) {
-      const panes = await this.p.listPanes();
-      const fresh = panes.find(function (x) {
-        return before.indexOf(x.id) < 0;
-      });
-      if (fresh != null) {
-        return fresh.id;
-      }
-      await this.p.sleep(300);
+  // Hooks (server/claude_chat/hooks.py) let the chat answer permission prompts and see the TUI's state; an older
+  // agent host without `tuiHooks` just starts the TUI without them.
+  Modes.prototype.hooks = async function (key) {
+    try {
+      const res = await this.p.cli("tuiHooks", { key: key });
+      return res != null && res.settings ? res : null;
+    } catch (e) {
+      console.warn("terminal hooks unavailable", e && e.message);
+      return null;
     }
-    return null;
   };
 
   Modes.prototype.toTerminal = async function () {
@@ -92,8 +74,7 @@ CC.Modes = (function () {
     }
     const st = this.p.status();
     if (st === "busy" || st === "waiting") {
-      const choice = await this.p.confirm({ title: "Interrupt Claude and switch to the terminal?",
-        message: "The current turn is interrupted; the conversation continues in a terminal tab.", buttons: ["Switch", "Cancel"], default: "Cancel", cancel: "Cancel" });
+      const choice = await this.p.confirm("Interrupt Claude and switch to the terminal? The current turn is interrupted; the conversation continues in a terminal tab.", ["Switch", "Cancel"]);
       if (choice !== "Switch") {
         return false;
       }
@@ -107,23 +88,18 @@ CC.Modes = (function () {
       if (this.p.sessionId() != null) {
         await this.p.agentStop();
       }
-      const command = "cd " + quote(cwd) + " && claude " + (tp.exists ? "--resume " : "--session-id ") + cliSessionId + "; exit";
-      const before = (await this.p.listPanes()).map(function (x) {
-        return x.id;
-      });
-      const req = { kind: "terminal", command: command };
-      const dir = relDir(await this.p.projectPath(), cwd);
-      if (dir != null) {
-        req.directory = dir;
-      }
-      const tabId = await this.p.openTerminal(req);
-      const paneId = await this.newPane(before);
-      if (tabId != null) {
-        await this.p.switchTab(tabId).catch(function (e) {
-          console.warn("switch to terminal tab failed", e && e.message);
+      const hooks = await this.hooks(this.p.sessionId() || cliSessionId);
+      const bin = shellWord(await this.p.claudeBin());
+      const command = bin + " " + (hooks != null ? "--settings " + quote(hooks.settings) + " " : "") +
+        (tp.exists ? "--resume " : "--session-id ") + cliSessionId + "; exit";
+      const opened = await this.p.openTerminal({ cwd: cwd, command: command });
+      if (opened.paneId != null) {
+        await this.p.focusTerminal(opened.paneId).catch(function (e) {
+          console.warn("switch to the terminal failed", e && e.message);
         });
       }
-      this.enterMirror({ terminalTabId: tabId != null ? String(tabId) : null, paneId: paneId, pid: null, cliSessionId: cliSessionId, cwd: cwd });
+      this.enterMirror({ terminalTabId: opened.tabId != null ? String(opened.tabId) : null, paneId: opened.paneId != null ? String(opened.paneId) : null, pid: null,
+        cliSessionId: cliSessionId, cwd: cwd, hooks: hooks != null ? hooks.dir : null });
       return true;
     } finally {
       this.switching = null;
@@ -152,7 +128,7 @@ CC.Modes = (function () {
     if (s.tuiSeen && !s.tuiGone) {
       s.tuiGone = true;
       this.notify();
-      if (this.settings.autoReturn) {
+      if (this.p.autoReturn()) {
         this.toChat().catch(function (e) {
           console.warn("auto return failed", e && e.message);
         });
@@ -167,8 +143,7 @@ CC.Modes = (function () {
     const s = this.state;
     const found = await this.p.cli("tuiFind", { pid: s.pid, cliSessionId: s.cliSessionId });
     if (found != null) {
-      const choice = await this.p.confirm({ title: "Close Claude in the terminal and continue here?",
-        message: "The terminal session ends and the conversation is resumed in this chat.", buttons: ["Continue here", "Cancel"], default: "Continue here", cancel: "Cancel" });
+      const choice = await this.p.confirm("Close Claude in the terminal and continue here? The terminal session ends and the conversation is resumed in this chat.", ["Continue here", "Cancel"]);
       if (choice !== "Continue here") {
         return false;
       }
@@ -190,7 +165,7 @@ CC.Modes = (function () {
       const paneId = s.paneId;
       this.state = { mode: "chat", terminalTabId: null, paneId: null, pid: null, cliSessionId: cliSessionId, cwd: s.cwd, tuiSeen: false, tuiGone: false };
       await this.persist();
-      await this.p.agentStart({ sessionId: sessionId, cliSessionId: cliSessionId, resume: tp.exists, cwd: s.cwd });
+      await this.p.agentStart({ sessionId: sessionId, cliSessionId: cliSessionId, resume: tp.exists, cwd: s.cwd, freshEvents: true });
       if (paneId != null) {
         await this.closePaneLater(paneId);
       }
@@ -218,20 +193,7 @@ CC.Modes = (function () {
       return String(x.id) === String(data.paneId);
     }) || null;
     const cwd = pane != null && pane.workingDirectory ? pane.workingDirectory : this.p.cwd();
-    let tui = null;
-    if (pane != null) {
-      try {
-        const bound = await this.p.reader("bind", { cwd: cwd, screen: await this.p.readScreen(pane.id, 60) });
-        if (bound.sid != null) {
-          tui = (await this.p.reader("poll", { sid: bound.sid, tail: 1 })).session || null;
-        }
-      } catch (e) {
-        console.warn("bind failed, matching by directory", e && e.message);
-      }
-    }
-    if (tui == null) {
-      tui = await this.p.cli("tuiFind", { cwd: cwd });
-    }
+    const tui = await this.p.cli("tuiFind", { cwd: cwd });
     if (tui == null) {
       throw new Error("No running Claude found for " + cwd);
     }
@@ -244,8 +206,6 @@ CC.Modes = (function () {
     return this.state.mode === "terminal" ? this.toChat() : this.toTerminal();
   };
 
-  Modes.PANE_WAIT_MS = 3000;
-  Modes.relDir = relDir;
   Modes.quote = quote;
   return Modes;
 })();

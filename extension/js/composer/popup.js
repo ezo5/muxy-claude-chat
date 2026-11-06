@@ -1,9 +1,8 @@
-window.CC = window.CC || {};
-
+// The completion list above the field, shared by `/` and `@`.
 CC.Composer.use(function (composer) {
-  const util = CC.util;
-  const el = util.el;
-  const box = el("div", "popup hidden");
+  const el = CC.util.el;
+  const box = el("div", "cmp-popup cc-floating");
+  box.hidden = true;
   composer.popupHost.appendChild(box);
   let items = [];
   let index = 0;
@@ -12,19 +11,19 @@ CC.Composer.use(function (composer) {
   function render() {
     box.textContent = "";
     if (current.title) {
-      box.appendChild(el("div", "popup-title", current.title));
+      box.appendChild(el("div", "cmp-popup-title", current.title));
     }
     items.forEach(function (it, i) {
-      const row = el("div", "popup-item" + (i === index ? " active" : ""));
-      row.appendChild(el("span", "pi-label", it.label));
+      const row = el("div", "cmp-popup-item");
+      row.appendChild(el("span", "cmp-popup-label", it.label));
       if (it.hint) {
-        row.appendChild(el("span", "pi-hint", it.hint));
+        row.appendChild(el("span", "cmp-popup-hint", it.hint));
       }
       if (it.desc) {
-        row.appendChild(el("span", "pi-desc", it.desc));
+        row.appendChild(el("span", "cmp-popup-desc", it.desc));
       }
       if (it.badge) {
-        row.appendChild(el("span", "pi-badge", it.badge));
+        row.appendChild(el("span", "cmp-popup-badge", it.badge));
       }
       row.addEventListener("mousedown", function (e) {
         e.preventDefault();
@@ -43,12 +42,12 @@ CC.Composer.use(function (composer) {
   }
 
   function highlight() {
-    const rows = box.querySelectorAll(".popup-item");
+    const rows = box.querySelectorAll(".cmp-popup-item");
     rows.forEach(function (r, i) {
-      r.classList.toggle("active", i === index);
+      r.classList.toggle("is-active", i === index);
     });
     const active = rows[index];
-    if (active != null) {
+    if (active != null && active.scrollIntoView != null) {
       active.scrollIntoView({ block: "nearest" });
     }
   }
@@ -74,14 +73,14 @@ CC.Composer.use(function (composer) {
     current.title = o.title || null;
     items = list;
     index = Math.min(o.keepIndex ? index : 0, list.length - 1);
-    box.classList.remove("hidden");
+    box.hidden = false;
     render();
   }
 
   function close() {
     current = null;
     items = [];
-    box.classList.add("hidden");
+    box.hidden = true;
   }
 
   composer.popup = {

@@ -1,0 +1,69 @@
+/* The only file that names --muxy-*. Every colour in the app goes through these tokens, so it follows any Muxy theme, live.
+   One meaning per colour role: --accent = primary and working, --need = needs you, --add and --del = diffs and failures. */
+:root {
+  color-scheme: dark;
+  --bg: var(--muxy-background, #1b1a1f);
+  --fg: var(--muxy-foreground, #d6d3dc);
+  /* Pulled towards the background, so the chat's text stands out against everything around it; a theme keeps its own hue. */
+  --muted: color-mix(in srgb, var(--muxy-foreground-muted, rgba(214, 211, 220, 0.62)) 86%, var(--bg));
+  --surface: var(--muxy-surface, rgba(214, 211, 220, 0.07));
+  --surface-solid: var(--muxy-surface-solid, #26252b);
+  --border: var(--muxy-border, #322f39);
+  --hover: var(--muxy-hover, rgba(214, 211, 220, 0.06));
+  /* Context categories: more hues than the theme gives, so fixed ones; the greys follow the theme. An exception to one meaning per colour role. */
+  --cat-messages: #5b8fe8;
+  --cat-tools: #e0733c;
+  --cat-memory: #4fae93;
+  --cat-prompt: #d19a2e;
+  --cat-rest: color-mix(in srgb, var(--fg) 55%, var(--bg));
+  --cat-quiet: color-mix(in srgb, var(--fg) 34%, var(--bg));
+  --cat-free: color-mix(in srgb, var(--fg) 12%, var(--bg));
+  --accent: var(--muxy-accent, #a98bdc);
+  --accent-fg: var(--muxy-accent-foreground, #17151c);
+  --accent-soft: var(--muxy-accent-soft, color-mix(in srgb, var(--accent) 12%, transparent));
+  --add: var(--muxy-diff-add, #5fbf85);
+  --del: var(--muxy-diff-remove, #e0728b);
+  --hunk: var(--muxy-diff-hunk, #56b6c2);
+  /* Muxy has no amber. Mixed with the foreground so it stays readable on a theme's own background. */
+  --need: color-mix(in srgb, #e0af68 88%, var(--fg));
+  --well: rgb(0 0 0 / 0.2);
+  --line: color-mix(in srgb, var(--border) 80%, transparent);
+  --bubble: color-mix(in srgb, var(--fg) 8%, var(--bg));
+  --side: color-mix(in srgb, var(--fg) 3%, var(--bg));
+  --shadow: 0 8px 28px rgb(0 0 0 / 0.38);
+
+  --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  --radius: 8px;
+  --radius-small: 6px;
+  --radius-big: 14px;
+  --flow-width: 716px;
+  --sidebar-width: 264px;
+  --rail-width: 272px;
+}
+
+:root[data-scheme="light"] {
+  color-scheme: light;
+  --bg: var(--muxy-background, #fbfafc);
+  --fg: var(--muxy-foreground, #2a2830);
+  /* Less than in the dark: a light theme's muted text starts out with less contrast. */
+  --muted: color-mix(in srgb, var(--muxy-foreground-muted, rgba(42, 40, 48, 0.62)) 94%, var(--bg));
+  --surface: var(--muxy-surface, rgba(42, 40, 48, 0.05));
+  --surface-solid: var(--muxy-surface-solid, #ffffff);
+  --border: var(--muxy-border, #e2dfe7);
+  --hover: var(--muxy-hover, rgba(42, 40, 48, 0.05));
+  --cat-messages: #2f6fdb;
+  --cat-tools: #c8591f;
+  --cat-memory: #23866a;
+  --cat-prompt: #a97410;
+  --cat-rest: color-mix(in srgb, var(--fg) 72%, var(--bg));
+  --cat-quiet: color-mix(in srgb, var(--fg) 44%, var(--bg));
+  --cat-free: color-mix(in srgb, var(--fg) 10%, var(--bg));
+  --accent: var(--muxy-accent, #6d4bb0);
+  --accent-fg: var(--muxy-accent-foreground, #ffffff);
+  --add: var(--muxy-diff-add, #23804d);
+  --del: var(--muxy-diff-remove, #c23a5b);
+  --need: color-mix(in srgb, #a86a10 88%, var(--fg));
+  --well: color-mix(in srgb, var(--fg) 4%, transparent);
+  --shadow: 0 8px 28px rgb(0 0 0 / 0.14);
+}

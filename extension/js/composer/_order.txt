@@ -1,0 +1,14 @@
+composer.js
+quote.js
+popup.js
+slash.js
+mention.js
+history.js
+attachments.js
+quotes.js
+queue.js
+drafts.js
+suggest.js
+approvals.js
+mode.js
+slots.js

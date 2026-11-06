@@ -1,5 +1,5 @@
-window.CC = window.CC || {};
-
+// Prompt history on ↑ / ↓: `~/.claude/history.jsonl` for this project (reader `meta`) and what's sent from here. The same reply has the
+// static command list for `/`.
 CC.Composer.use(function (composer) {
   let list = [];
   let index = -1;
@@ -9,6 +9,21 @@ CC.Composer.use(function (composer) {
     list = items.slice();
     index = -1;
   };
+
+  async function load() {
+    try {
+      if (composer.runtime.cwd == null) {
+        await composer.runtime.ready;
+      }
+      const m = await CC.Servers.of(composer.runtime).host.call("meta", { cwd: composer.cwd() });
+      if (!composer.disposed) {
+        composer.commands = m.commands || [];
+        composer.setHistory(list.concat(m.history || []));
+      }
+    } catch (e) {
+      console.warn("prompt history not loaded", e && e.message);
+    }
+  }
 
   composer.on("submitted", function (entry) {
     if (entry.text.trim() === "") {
@@ -60,4 +75,6 @@ CC.Composer.use(function (composer) {
     }
     return false;
   });
+
+  load();
 });

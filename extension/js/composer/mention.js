@@ -1,5 +1,4 @@
-window.CC = window.CC || {};
-
+// `@` file completion: `files` on the server is `git ls-files` or a walk.
 CC.Composer.use(function (composer) {
   const owner = { name: "mention" };
   let timer = null;
@@ -25,7 +24,7 @@ CC.Composer.use(function (composer) {
       if (composer.popup.isOpen(owner)) {
         composer.popup.close();
       }
-      return;
+      return false;
     }
     const mine = ++seq;
     timer = setTimeout(async function () {
@@ -36,7 +35,7 @@ CC.Composer.use(function (composer) {
         console.warn("file search failed", e && e.message);
         return;
       }
-      if (mine !== seq || token() == null) {
+      if (mine !== seq || composer.disposed || token() == null) {
         return;
       }
       composer.popup.open(owner, files.map(function (f) {
@@ -44,6 +43,7 @@ CC.Composer.use(function (composer) {
         return { label: f.slice(slash + 1), desc: slash > 0 ? f.slice(0, slash + 1) : "", path: f };
       }), { title: "Files" });
     }, 140);
+    return false;
   }
 
   owner.onPick = function (it) {
@@ -54,8 +54,7 @@ CC.Composer.use(function (composer) {
     const ta = composer.input;
     const after = ta.value.slice(ta.selectionStart);
     const insert = "@" + it.path + (it.path.slice(-1) === "/" ? "" : " ");
-    const value = ta.value.slice(0, t.start) + insert + after;
-    composer.setValue(value);
+    composer.setValue(ta.value.slice(0, t.start) + insert + after);
     const pos = t.start + insert.length;
     ta.setSelectionRange(pos, pos);
     if (it.path.slice(-1) === "/") {
@@ -64,4 +63,7 @@ CC.Composer.use(function (composer) {
   };
 
   composer.on("input", update);
+  composer.onDispose(function () {
+    clearTimeout(timer);
+  });
 });

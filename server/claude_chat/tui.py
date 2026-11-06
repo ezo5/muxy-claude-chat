@@ -1,6 +1,8 @@
 """Interactive Claude TUIs: ~/.claude/sessions/<pid>.json (written by the CLI), SIGTERM, transcript paths."""
 import glob, json, os, re, shutil, signal, time
 
+import hooks
+
 HOME = os.path.expanduser("~")
 CLAUDE = os.path.join(HOME, ".claude")
 SESSIONS = os.path.join(CLAUDE, "sessions")
@@ -95,4 +97,8 @@ def op_transcript_path(req):
     return {"path": path, "exists": os.path.isfile(path)}
 
 
-OPS = {"tuiFind": op_find, "tuiExit": op_exit, "transcriptPath": op_transcript_path}
+def op_hooks(req):
+    return hooks.setup(req.get("key"))
+
+
+OPS = {"tuiFind": op_find, "tuiExit": op_exit, "transcriptPath": op_transcript_path, "tuiHooks": op_hooks}

@@ -1,0 +1,14 @@
+/* Chat or terminal: the header pair reads as one framed control; the margin takes back the header gap (4px) and shares the middle border. */
+.cc-mode-seg { width: 28px; height: 24px; border: 1px solid var(--border); border-radius: var(--radius-small) 0 0 var(--radius-small); }
+.cc-mode-seg + .cc-mode-seg { margin-left: -5px; margin-right: 4px; border-radius: 0 var(--radius-small) var(--radius-small) 0; }
+
+/* In the terminal the composer stays mounted, so a draft survives, and this bar takes its place. */
+.cc-chat-locked .cc-slot-composer, .cc-chat-locked .cc-slot-belowComposer { display: none; }
+.cc-mode-bar { display: flex; align-items: center; gap: 8px; padding: 8px 10px 8px 14px; border: 1px solid var(--border); border-radius: var(--radius-big); background: var(--surface); }
+.cc-mode-bar[hidden] { display: none; }
+.cc-mode-bar-text { flex: 1; min-width: 0; color: var(--muted); }
+
+/* Notes that never block: over the sidebar and above its footer, clear of the composer. The bottom right belongs to toasts. */
+.cc-notices { position: fixed; left: 12px; bottom: 44px; z-index: 40; display: flex; flex-direction: column; gap: 8px; width: calc(var(--sidebar-width) - 24px); }
+.cc-notice { display: flex; align-items: flex-start; gap: 8px; padding: 8px 6px 8px 12px; border-radius: var(--radius); font-size: 13px; }
+.cc-notice-text { flex: 1; min-width: 0; padding-top: 3px; }

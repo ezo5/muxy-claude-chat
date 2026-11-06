@@ -1,0 +1,4 @@
+panes.js
+rail.js
+chat-pane.js
+shell.js

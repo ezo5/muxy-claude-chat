@@ -1,0 +1,143 @@
+/* The sidebar. Rows are the kit's cc-row; this adds what only a tree needs. */
+.sb-top { gap: 2px; }
+.cc-shell.is-sidebar-only .sb-collapse { display: none; }
+
+/* A server's head, over its projects: icon, name, online dot. Not a project: no tile, and a rule to tell where the server before it ended. */
+.sb-srv { display: flex; align-items: center; margin-top: 28px; padding-top: 12px; border-top: 1px solid var(--line); }
+.sb-srv:first-child { margin-top: 4px; padding-top: 0; border-top: 0; }
+.sb-srv-toggle { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: var(--fg); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.sb-srv-toggle > svg { flex: none; color: var(--muted); }
+.sb-srv-toggle:hover { background: var(--hover); }
+.sb-srv-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.sb-srv-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-srv .sb-chev { display: inline-flex; flex: none; opacity: 0; transform: rotate(90deg); transition: transform 0.12s; }
+.sb-srv:hover .sb-chev, .sb-srv-toggle:focus-visible .sb-chev, .sb-srv.is-collapsed .sb-chev { opacity: 0.8; }
+.sb-srv.is-collapsed .sb-chev { transform: none; }
+.sb-srv .cc-mark { height: 14px; }
+.sb-srv-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); opacity: 0.55; }
+.sb-srv-dot[data-state="up"] { background: var(--add); opacity: 1; }
+.sb-srv-dot[data-state="down"] { background: var(--del); opacity: 1; }
+.sb-tree { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 6px 12px; }
+.sb-empty { padding: 20px 14px; color: var(--muted); font-size: 13px; text-align: center; }
+.sb-foot { flex: none; padding: 8px 14px; border-top: 1px solid var(--line); font-size: 12px; line-height: 1.4; color: var(--muted); }
+.sb-foot[hidden] { display: none; }
+
+/* A project's square. Fixed mid tones, each readable with white in light and dark on any theme; no token says "one of six", and the accent, amber, red and green keep their one meaning. */
+.sb-tile { --sb-tile: #64748b; width: 20px; height: 20px; flex: none; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; background: var(--sb-tile); color: #fff; font-size: 11.5px; font-weight: 500; line-height: 1; }
+.sb-tile[data-tone="0"] { --sb-tile: #2f8f83; }
+.sb-tile[data-tone="1"] { --sb-tile: #4a76d4; }
+.sb-tile[data-tone="2"] { --sb-tile: #7660d8; }
+.sb-tile[data-tone="3"] { --sb-tile: #b4558f; }
+.sb-tile[data-tone="4"] { --sb-tile: #3f8f55; }
+.sb-tile[data-tone="5"] { --sb-tile: #64748b; }
+.sb-lead { width: 20px; height: 20px; flex: none; display: inline-flex; align-items: center; justify-content: center; }
+.sb-branch { flex: 0 1 auto; min-width: 0; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.sb-pill { flex: none; padding: 0 7px; border-radius: var(--radius-small); background: color-mix(in srgb, var(--need) 20%, transparent); color: var(--need); font-size: 11.5px; line-height: 20px; white-space: nowrap; }
+.sb-live { width: 6px; height: 6px; border-radius: 50%; background: color-mix(in srgb, var(--muted) 70%, transparent); }
+
+/* Group and project headers */
+.sb-head { display: flex; align-items: center; margin-top: 10px; }
+.sb-head:first-child { margin-top: 2px; }
+.sb-head-toggle { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px 0 7px; border-radius: var(--radius-small); font-size: 12px; color: var(--muted); }
+.sb-head-toggle:hover { color: var(--fg); }
+.sb-chev { display: inline-flex; flex: none; opacity: 0; transform: rotate(90deg); transition: transform 0.12s; }
+.sb-head:hover .sb-chev, .sb-head-toggle:focus-visible .sb-chev, .sb-head.is-collapsed .sb-chev { opacity: 0.8; }
+.sb-head.is-collapsed .sb-chev { transform: none; }
+.sb-head-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-head-tag { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.7; }
+.sb-head-count { flex: none; font-variant-numeric: tabular-nums; opacity: 0.7; }
+.sb-head .cc-mark { height: 14px; }
+/* Every spinner in the sidebar is the accent one, also a background wait's. The tooltip says which it is. */
+.cc-sidebar .cc-spin-quiet { border-color: color-mix(in srgb, var(--accent) 25%, transparent); border-top-color: var(--accent); }
+.sb-head .cc-icon-btn { width: 22px; height: 22px; opacity: 0; }
+.sb-head:hover .cc-icon-btn, .sb-head .cc-icon-btn:focus-visible { opacity: 1; }
+
+/* A project is a row like its chats, its + always there */
+.sb-project { margin-top: 18px; margin-bottom: 4px; border-radius: 10px; }
+.sb-srv + .sb-project { margin-top: 6px; }
+.sb-project:hover { background: var(--hover); }
+/* Where New Chat goes, quieter than the chat on screen right under it. */
+.sb-project.is-selected { background: var(--hover); }
+.sb-project .sb-head-toggle { height: 32px; gap: 8px; padding: 0 2px 0 8px; font-size: 13px; color: var(--fg); }
+.sb-project .sb-head-label { flex: 0 1 auto; font-weight: 600; }
+.sb-head-fill { flex: 1; min-width: 0; }
+.sb-project .cc-icon-btn { opacity: 0.7; margin-right: 4px; }
+.sb-project .sb-chev { width: 22px; height: 22px; align-items: center; justify-content: center; border-radius: var(--radius-small); color: var(--muted); }
+.sb-project .sb-chev:hover { color: var(--fg); opacity: 1; }
+.sb-project .sb-chev:focus-visible { opacity: 1; outline: 2px solid var(--accent); outline-offset: -2px; }
+.sb-project:hover .cc-icon-btn { opacity: 1; }
+
+/* Rows. The gap sits inside the wrap, so two selected neighbours stay apart and a child's line runs on. */
+.sb-item { padding-bottom: 2px; }
+.sb-item .cc-row { padding: 6px 8px; gap: 8px; border-radius: 10px; }
+.sb-item .cc-row.is-active { background: color-mix(in srgb, var(--fg) 9%, transparent); }
+.sb-item .cc-row-title { line-height: 20px; }
+.sb-item .cc-mark { height: 20px; }
+.sb-mark-terminal { color: var(--muted); }
+.sb-item .cc-row-sub.is-need, .sb-preview { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
+.sb-item .cc-row-sub.is-need { -webkit-line-clamp: 2; }
+.sb-preview { white-space: pre-line; }
+.sb-end { position: absolute; top: 6px; right: 8px; display: flex; align-items: center; justify-content: flex-end; gap: 5px; height: 20px; pointer-events: none; }
+.sb-end button { pointer-events: auto; }
+.sb-end .sb-branch { max-width: var(--sb-text-max); }
+.sb-end .cc-icon-btn { width: 20px; height: 20px; }
+.sb-item:not(:hover) .sb-end .cc-icon-btn:not(:focus-visible) { width: 0; overflow: hidden; opacity: 0; }
+/* The end floats, so the title reserves its room: about half an em per letter of text, up to what the text may take, plus what's beside it. */
+.sb-item { container-type: inline-size; --sb-text-max: 34cqw; --sb-text: 0px; --sb-state: 0px; --sb-kid: 0px; --sb-x: 0px; }
+.sb-item.has-pill { --sb-text-max: 22cqw; }
+.sb-item.has-meta { --sb-text: calc(min(var(--sb-text-max), var(--sb-meta-ch) * 0.48em) + 12px); }
+.sb-item.has-pill { --sb-state: 77px; }
+.sb-item.has-kids { --sb-kid: 18px; }
+.sb-item.has-agents { --sb-kid: 42px; }
+.sb-item:hover, .sb-item.has-num { --sb-text: 0px; --sb-x: 22px; }
+.sb-item .cc-row-title { padding-right: calc(var(--sb-text) + var(--sb-state) + var(--sb-kid) + var(--sb-x)); }
+.sb-meta { color: var(--muted); font-size: 11px; line-height: 16px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.sb-item:hover .sb-meta, .sb-item:hover .sb-end .sb-branch { display: none; }
+.sb-num { min-width: 16px; padding: 0 4px; border-radius: 5px; background: var(--surface); color: var(--muted); font-size: 11px; line-height: 16px; text-align: center; font-variant-numeric: tabular-nums; }
+.sb-kids { display: inline-flex; align-items: center; gap: 2px; height: 20px; padding: 0 3px; border-radius: 5px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.sb-kids:hover { background: var(--hover); color: var(--fg); }
+.sb-kids .cc-svg { transition: transform 0.12s; }
+.sb-kids.is-open .cc-svg:last-child { transform: rotate(90deg); }
+.sb-item .cc-row-actions { margin: 0 0 5px 36px; }
+
+/* Children */
+.sb-child { padding-left: calc(var(--sb-depth, 1) * 14px); }
+.sb-child .cc-row { padding: 3px 8px 3px 12px; }
+.sb-child .cc-mark { height: 19px; }
+.sb-child .cc-row-title { font-size: 12.5px; }
+.sb-agent .cc-row-title, .sb-agent .cc-mark { color: var(--muted); }
+
+/* Drag and drop */
+.sb-ghost { position: fixed; z-index: 70; margin: 0; padding: 4px 8px; display: flex; align-items: flex-start; gap: 8px; border-radius: var(--radius); opacity: 0.95; pointer-events: none; }
+.sb-drop-line { position: fixed; z-index: 70; height: 2px; border-radius: 1px; background: var(--accent); pointer-events: none; }
+.sb-dragging { opacity: 0.4; }
+.sb-dnd-active, .sb-dnd-active * { cursor: grabbing; user-select: none; -webkit-user-select: none; }
+
+/* Hover card */
+.sb-tip { position: fixed; z-index: 40; max-height: 60vh; overflow: hidden; padding: 8px 10px; border-radius: var(--radius); font-size: 12px; line-height: 1.45; pointer-events: none; }
+.sb-tip-title { font-size: 13px; font-weight: 500; }
+.sb-tip-state { color: var(--muted); }
+.sb-tip-state.is-need { color: var(--need); }
+.sb-tip-label { margin-top: 6px; color: var(--muted); }
+.sb-tip-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; white-space: pre-line; }
+.sb-tip-meta { margin-top: 6px; color: var(--muted); }
+
+/* View menu */
+.sb-view-menu { width: 240px; }
+.sb-view-tick { width: 13px; flex: none; display: flex; }
+.sb-view-label { flex: 1; min-width: 0; }
+.sb-view-value { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.sb-view-chev { display: inline-flex; color: var(--muted); }
+.sb-view-back { color: var(--muted); }
+.sb-view-back .cc-svg { transform: rotate(180deg); }
+
+/* Forms in dialogs */
+.sb-form { display: flex; flex-direction: column; gap: 10px; }
+.sb-field { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+.sb-input { width: 100%; padding: 5px 8px; border: 1px solid var(--border); border-radius: var(--radius-small); background: transparent; color: var(--fg); font-size: 13px; }
+.sb-check { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.sb-form-error { color: var(--del); font-size: 12px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .sb-chev, .sb-srv .sb-chev, .sb-kids .cc-svg { transition: none; }
+}

@@ -12,7 +12,7 @@ SKILL_FILE_RE = re.compile(r"/skills/(?:[^/]+/)?([^/]+)/SKILL\.md$")
 
 
 def build_argv(claude_bin, session_id, resume=False, fork=False, model=None, effort=None, permission_mode=None, partial=True, extra=None,
-               plugin_dirs=None, add_dirs=None, system_prompt_file=None):
+               plugin_dirs=None, add_dirs=None, system_prompt_file=None, resume_at=None):
     argv = [claude_bin, "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
             "--permission-prompt-tool", "stdio"]
     if partial:
@@ -25,6 +25,8 @@ def build_argv(claude_bin, session_id, resume=False, fork=False, model=None, eff
         argv += ["--effort", effort]
     if resume:
         argv += ["--resume", session_id]
+        if resume_at:
+            argv += ["--resume-session-at", resume_at]
         if fork:
             argv.append("--fork-session")
     else:
@@ -36,6 +38,22 @@ def build_argv(claude_bin, session_id, resume=False, fork=False, model=None, eff
     if system_prompt_file:
         argv += ["--append-system-prompt-file", system_prompt_file]
     return argv + list(extra or [])
+
+
+BTW_PROMPT = ("The user asks a side question while the main task goes on in another process. Answer it briefly from the conversation "
+              "so far; do not continue or redo the main task. You have no tools.")
+
+
+# `/btw`: a throwaway fork of the conversation answers one question from stdin; hooks are off so it does not run the
+# user's session hooks.
+def btw_argv(claude_bin, cli_session_id=None, model=None):
+    argv = [claude_bin, "-p", "--output-format", "json", "--no-session-persistence", "--tools", "", "--settings", '{"disableAllHooks":true}',
+            "--append-system-prompt", BTW_PROMPT]
+    if model:
+        argv += ["--model", model]
+    if cli_session_id:
+        argv += ["--resume", cli_session_id, "--fork-session"]
+    return argv
 
 
 def control_request(request_id, subtype, payload=None):
@@ -105,6 +123,19 @@ def text_of(message):
     return "\n".join(parts)
 
 
+PREVIEW_MAX = 300
+
+
+def clip(text):
+    # one line of at most PREVIEW_MAX chars for the sidebar's chat rows
+    s = " ".join((text or "").split())
+    return s if len(s) <= PREVIEW_MAX else s[:PREVIEW_MAX - 1] + "…"
+
+
+def with_preview(state, **kw):
+    return dict(state.get("preview") or {}, **kw)
+
+
 def apply_event(state, ev, now=0):
     # pure: returns the state fields changed by a CLI stdout message
     t, st = ev.get("type"), ev.get("subtype")
@@ -147,11 +178,20 @@ def apply_event(state, ev, now=0):
             m = EFFORT_RE.search(text_of(msg))
             if m:
                 up["effort"] = m.group(1)
+        reply = clip(text_of(msg)) if ev.get("parent_tool_use_id") is None and msg.get("model") != "<synthetic>" else ""
+        if reply:
+            up["preview"] = with_preview(state, reply=reply)
         for b in msg.get("content") or []:
             if isinstance(b, dict) and b.get("type") == "tool_use" and ev.get("parent_tool_use_id") is None:
                 skill = skill_of(b.get("name"), b.get("input") or {})
                 if skill:
                     up["lastSkill"] = skill
+                up["runningTools"] = with_running_tool(up.get("runningTools", state.get("runningTools")), b, now)
+    elif t == "user":
+        if ev.get("parent_tool_use_id") is None and state.get("runningTools"):
+            finished = {b.get("tool_use_id") for b in (ev.get("message") or {}).get("content") or [] if isinstance(b, dict) and b.get("type") == "tool_result"}
+            if finished:
+                up["runningTools"] = [r for r in state["runningTools"] if r.get("id") not in finished]
     elif t == "result":
         if ev.get("total_cost_usd") is not None:
             up["cost"] = ev["total_cost_usd"]
@@ -173,6 +213,7 @@ def apply_event(state, ev, now=0):
         up["startedUuids"] = []
         up["turn"] = {"startedAt": now, "promptId": queue[0]} if queue else {"startedAt": None, "promptId": None}
         up["activity"] = None
+        up["runningTools"] = []
     elif t == "command_lifecycle":
         if ev.get("state") == "started" and ev.get("command_uuid"):
             up["startedUuids"] = list(state.get("startedUuids") or []) + [ev["command_uuid"]]
@@ -184,6 +225,25 @@ def apply_event(state, ev, now=0):
     return up
 
 
+# What the main thread is running now, newest last. The input's main argument says on what, for the sidebar's row.
+TARGET_KEYS = ("file_path", "notebook_path", "path", "command", "pattern", "url", "query", "description", "skill")
+RUNNING_TOOLS_MAX = 20
+TARGET_MAX = 200
+
+
+def tool_target(inp):
+    for k in TARGET_KEYS:
+        if isinstance((inp or {}).get(k), str) and inp[k]:
+            return " ".join(inp[k].split())[:TARGET_MAX]
+    return None
+
+
+def with_running_tool(rows, block, now):
+    rows = [r for r in rows or [] if r.get("id") != block.get("id")]
+    rows.append({"id": block.get("id"), "name": block.get("name"), "target": tool_target(block.get("input")), "since": now})
+    return rows[-RUNNING_TOOLS_MAX:]
+
+
 def apply_control_result(state, request, response):
     # state fields changed by the CLI's reply to a control we sent
     up = {}
@@ -193,7 +253,7 @@ def apply_control_result(state, request, response):
     if not ok:
         return up
     if sub == "get_context_usage":
-        up["contextUsage"] = body
+        up["contextUsage"] = {k: v for k, v in body.items() if k != "gridRows"}
     elif sub == "set_permission_mode":
         up["permissionMode"] = body.get("mode") or request.get("mode")
     elif sub == "set_model" and request.get("model"):
@@ -219,6 +279,9 @@ def apply_prompt(state, inbox_id, text, now=0, uuid=None):
         up["promptUuids"] = dict(state.get("promptUuids") or {}, **{inbox_id: uuid})
     if not state.get("promptQueue"):
         up["turn"] = {"startedAt": now, "promptId": inbox_id}
+    # slash commands (/model, /effort, /clear…) say nothing about the conversation
+    if clip(text) and not (text or "").lstrip().startswith("/"):
+        up["preview"] = with_preview(state, prompt=clip(text), first=(state.get("preview") or {}).get("first") or clip(text))
     m = MODEL_CMD_RE.match(text or "")
     if m:
         up["model"] = m.group(1)

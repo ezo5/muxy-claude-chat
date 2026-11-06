@@ -21,10 +21,10 @@ usage() {
 Usage: host/install.sh [options]
 
 Sets up claude-chat for Muxy 2.x on this Mac:
-  1. registers $EXT_DIR as an unpacked extension and enables it
+  1. builds $EXT_DIR/dist if needed, registers $EXT_DIR as an unpacked extension and enables it
      (only while Muxy is not running; otherwise prints the manual steps),
-  2. runs server/setup.py --server on each target (--local and/or --server): installs the
-     claude_chat agent host under ~/.local/share/claude-chat on that computer,
+  2. with --statusline or --open-bridge, runs server/setup.py on each target (--local and/or --server).
+     The server package itself needs no step: the app installs it when it first opens on a server,
   3. with --open-bridge, installs one LaunchAgent $LABEL.<server> per server.
 
 Targets:
@@ -43,7 +43,7 @@ Features:
 
 Modes:
   --check                 Diagnose only; changes nothing. Per target: python, claude, package
-                          state and the running chat daemons (setup.py --check).
+                          and the running chat daemons (setup.py --check).
   --uninstall             Remove the registration and the LaunchAgent; with targets, also run
                           setup.py --uninstall there (stops the daemons, removes the package).
                           The repo itself is left alone.
@@ -227,6 +227,27 @@ manual_register() {
   manual+=("In Muxy: Settings -> Extensions -> Load Unpacked... -> $ext_path, then enable $ext_name.")
 }
 
+# Muxy loads a package's dist/, which isn't in git.
+build_extension() {
+  [[ -f $EXT_DIR/dist/package.json ]] && return 0
+  if ! find_local_python; then
+    warn "$EXT_DIR/dist is missing and python3 isn't on this Mac; run $EXT_DIR/build.py --no-sample where python3 is"
+    return 1
+  fi
+  act $local_python $EXT_DIR/build.py --no-sample
+}
+
+# An empty value in [keymap] takes a shortcut away, and it applies to whatever has that id. Left over from running two versions side by side.
+warn_keymap() {
+  local settings=$profile/settings.toml
+  [[ -f $settings ]] || return 0
+  local lines
+  lines=$(grep -E '^[[:space:]]*"?extension\.claude-chat\.[^"=]*"?[[:space:]]*=[[:space:]]*""' $settings)
+  [[ -z $lines ]] && return 0
+  warn "$settings takes these shortcuts away from claude-chat; delete the lines to get them back:"
+  print -r -- $lines | sed 's/^/      /'
+}
+
 register_extension() {
   local folders=$profile/extension-folders.json enabled=$profile/extension-enabled.json old on backup
   if (( ! register )); then say "skipped (--no-register)"; manual_register; return; fi
@@ -252,6 +273,21 @@ register_extension() {
   write_file $enabled "$(jxa set-add $enabled $ext_name)" || die "cannot write $enabled"
   ok "registered $ext_name -> $ext_path (enabled; previous files backed up to $backup)"
   done_items+=("Extension $ext_name registered and enabled in ${profile:t}")
+}
+
+# The preview id of the same app, from before 3.0: it would keep running beside this one, on stale files.
+drop_preview() {
+  local folders=$profile/extension-folders.json enabled=$profile/extension-enabled.json
+  (( register )) && [[ -d $profile ]] || return 0
+  [[ -n $(jxa get $folders claude-chat-next 2>/dev/null) ]] || return 0
+  if muxy_running; then
+    manual+=("In Muxy: Settings -> Extensions -> claude-chat-next -> Remove.")
+    return 0
+  fi
+  write_file $folders "$(jxa map-del $folders claude-chat-next)" || die "cannot write $folders"
+  write_file $enabled "$(jxa set-del $enabled claude-chat-next)" || die "cannot write $enabled"
+  ok "removed the preview registration claude-chat-next"
+  done_items+=("Preview registration claude-chat-next removed")
 }
 
 unregister_extension() {
@@ -335,20 +371,19 @@ check_target() { # <target>; returns 1 if the target is unusable
     say "$t: muxy CLI not found (optional: only adopting a terminal with several Claudes in one directory needs it)"
   fi
   [[ $sum == *"claude: not found"* ]] && warn "$t: claude not found on PATH (set claudeBin in ~/.config/claude-chat/config.json on the server)"
-  if [[ $mode == check ]]; then
-    [[ $sum == *"server: installed=false"* ]] && warn "$t: claude-chat server package not installed; run the installer with this target"
-    [[ $sum == *"current=false"* ]] && warn "$t: installed server package differs from this checkout; run the installer again"
-  fi
   return 0
 }
 
 setup_target() { # <target>
   local t=$1
   local -a args
-  args=(--server)
   (( statusline )) && args+=(--statusline)
   if [[ -n ${bridge_server_of[$t]-} && $t != local ]]; then
     args+=(--open-bridge-dir ${bridge_server_of[$t]}/$BRIDGE_DIRNAME --open-bridge-root ${bridge_server_of[$t]})
+  fi
+  if (( ! ${#args} )); then
+    ok "$t: nothing to set up here; the app installs its package when it first opens on this server"
+    return 0
   fi
   if (( dry )); then
     if [[ $t == local ]]; then act $local_python $SETUP_PY $args
@@ -522,7 +557,7 @@ note_servers() {
     for r in $rows; do say "  ${r%%$'\t'*} -> ${r#*$'\t'}"; done
   fi
   if (( ! ${#targets} )); then
-    say "no target given; pass --local and/or --server <ssh> to set up the server side"
+    say "no target given; only --statusline and --open-bridge need one"
   else
     local s
     for s in $servers; do
@@ -550,6 +585,8 @@ case $mode in
       elif [[ -d $profile/extensions/$ext_name ]]; then say "installed as a package (not this checkout)"
       else warn "not registered"; fi
       [[ $local_on == 1 ]] && ok "enabled" || warn "not enabled"
+      [[ -f $EXT_DIR/dist/package.json ]] && ok "built" || warn "$EXT_DIR/dist is missing; run $EXT_DIR/build.py --no-sample"
+      warn_keymap
     fi
     step "Servers"
     note_servers
@@ -571,7 +608,10 @@ case $mode in
     ;;
   install)
     step "Extension"
+    build_extension
     register_extension
+    drop_preview
+    warn_keymap
     step "Servers"
     note_servers
     [[ -f $SETUP_PY ]] || { (( ${#targets} )) && die "$SETUP_PY not found; update the checkout" }
@@ -584,7 +624,8 @@ case $mode in
       for t in ${(k)bridge_host_of}; do install_bridge $t; done
     fi
     [[ -f $OLD_AGENT ]] && notes+=("app.muxy.cmd-watch (old cmd-bridge) is not needed by claude-chat; keep it only if you use it for other things.")
-    manual+=("On first use, allow and remember Muxy's prompts: running python3 (the chat's server CLI, twice: reader and agent host), opening a terminal tab (chat -> terminal).")
+    manual+=("On first use, allow and remember Muxy's prompts: the server check (a shell line), python3, a terminal tab per command (chat -> terminal).")
+    notes+=("Optional: Muxy Settings -> Appearance, layout Tab Focused with the built-in sidebar collapsed gives the app the whole window.")
     ;;
 esac
 
@@ -594,7 +635,7 @@ elif (( ! dry )); then say "nothing changed"; fi
 for x in $manual; do say "${B}manual:${N} $x"; done
 for x in $notes; do say "note: $x"; done
 if [[ $mode == install ]]; then
-  say "update: git pull, then Settings -> Extensions -> $ext_name -> Reload (re-run this script if host/ or server/ changed)"
+  say "update: git pull, $EXT_DIR/build.py --no-sample, then Settings -> Extensions -> $ext_name -> Reload (re-run this script if host/ or statusline.py changed)"
   say "check:  ${(q-)SCRIPT} --check $target_flags"
   say "remove: ${(q-)SCRIPT} --uninstall $target_flags"
 fi

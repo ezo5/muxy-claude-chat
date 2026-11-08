@@ -65,7 +65,7 @@ pending in 2.x, as queued messages, per-tab Review comments and chats in termina
 
 1. Get the new version and build it (above). A registration of `<checkout>/extension` keeps working.
 2. If `settings.toml` has `"extension.claude-chat.<command>" = ""` lines in `[keymap]`, delete them: they take that command's shortcut away.
-3. Settings → Extensions → claude-chat → **Reload**, or restart Muxy.
+3. Settings → Extensions → claude-chat → **Reload**, or restart Muxy. Re-running `host/install.sh` also moves Muxy's window and tab shortcuts off the keys the app uses (`--no-keymap` to leave them); with Muxy 2.4+ also while it runs.
 4. If Settings → Appearance has Claude Chat as the active sidebar: the built-in sidebar shows instead, as 3.0 has none of its own.
 
 Then:
@@ -79,7 +79,8 @@ Then:
 ## What the installer does
 
 `host/install.sh` is for the extras, and for registering from a checkout. It runs on a Mac and needs only what macOS ships, plus `python3`
-if `extension/dist` isn't built yet.
+if `extension/dist` isn't built yet. With Muxy 2.4+ it registers the extension and applies Muxy's shortcuts through the `muxy` CLI in
+Muxy's bundle, also while Muxy runs, and starts Muxy if it isn't; with an older Muxy, quit it first, and the extension is registered by hand.
 
 ```
 host/install.sh [--local] [--server SSH]... [--statusline] [--open-bridge [SSH=]HOST:SERVER]... [--bridge-poll]
@@ -184,19 +185,19 @@ Remembered answers belong to the extension id and the exact command: updating fr
 cd ~/src/claude-chat && git pull && python3 extension/build.py --no-sample
 ```
 
-Then Settings → Extensions → claude-chat → **Reload**. A new version installs its server package beside the old one, without touching
+Then Settings → Extensions → claude-chat → **Reload** (or `muxy extension reload claude-chat`, Muxy 2.4+). A new version installs its server package beside the old one, without touching
 running daemons, and removes old versions when nothing uses them.
 
 ## Uninstall
 
-Quit Muxy first, then:
+With Muxy older than 2.4, quit it first. Then:
 ```bash
 host/install.sh --uninstall --server devbox     # or --local, or no target for the Mac side only
 ```
 
 This removes the registration, the LaunchAgent, its script and the Mac's `.claude-chat-bridge` folder. On each target, `setup.py --uninstall`
 stops the daemons, restores your previous statusline command and removes the packages and the config. Kept: the checkout, `~/.cache/claude-chat/`
-and `~/.config/claude-chat/kv/` on the server, and the extension's storage and permission answers in the Muxy profile.
+and `~/.config/claude-chat/kv/` on the server. Muxy forgets the extension's permission answers.
 
 ## Troubleshooting
 

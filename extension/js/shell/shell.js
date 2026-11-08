@@ -19,7 +19,11 @@ CC.Shell = (function () {
   let panesEl = null;
   let railEl = null;
   let railHandle = null;
+  const EMPTY_TEXT = "Pick a chat, or start a new one.";
   let emptyEl = null;
+  let emptyText = null;
+  let emptyNew = null;
+  let emptyRun = null;
   let emptyBar = null;
   let sidebarHandle = null;
   let saveTimer = null;
@@ -277,6 +281,9 @@ CC.Shell = (function () {
 
   function sameTarget(p, target) {
     const chatId = target.chatId != null ? target.chatId : null;
+    if (p.kind === "terminal" && target.kind === "terminal") {
+      return p.params.id === target.params.id;
+    }
     return p.kind === target.kind && p.chatId === chatId;
   }
 
@@ -301,7 +308,7 @@ CC.Shell = (function () {
   }
 
   // Where a pane goes: {at, replace}. The one rule of what an open may displace.
-  // Without `beside` it takes the focused pane, except that a chat goes to a chat pane: a diff, file, plan, pins, agent or Settings being read stays.
+  // Without `beside` it takes the focused pane, except that a chat goes to a chat, terminal or agent pane: a diff, file, plan, pins or Settings being read stays. A terminal taken keeps running, its row brings it back.
   // With `beside` it goes after the focused pane; when full it takes the rightmost other pane, a chat for a chat if there is one, so what you're reading stays.
   function placement(target, beside) {
     const isChat = target.kind === "chat";
@@ -319,7 +326,7 @@ CC.Shell = (function () {
       const other = isChat ? rightmost(function (p) { return p.kind === "chat" && p.id !== S.focus; }) : -1;
       return { at: other >= 0 ? other : rightmost(function (p) { return p.id !== S.focus; }), replace: true };
     }
-    if (!isChat || S.panes[at].kind === "chat") {
+    if (!isChat || S.panes[at].kind === "chat" || S.panes[at].kind === "terminal" || S.panes[at].kind === "agent") {
       return { at: at, replace: true };
     }
     const chat = lastChatPane();
@@ -378,6 +385,85 @@ CC.Shell = (function () {
     render();
     save();
     focusIfNowhere();
+  }
+
+  // Muxy keeps Cmd+W from the page, so this is the only place to hear it. Reloading from Settings has that window focused, so it isn't refused.
+  function closeFocusedInstead() {
+    const p = focused();
+    if (p == null || S.panes.length < 2 || S.sidebarOnly || !CC.host.app.focused()) {
+      return false;
+    }
+    closeShown(p);
+    return true;
+  }
+
+  function closeFocusedPane() {
+    const p = focused();
+    if (p != null && !S.sidebarOnly) {
+      closeShown(p);
+    }
+  }
+
+  // The sidebar row a pane closes as: a chat, or a terminal with its own row. A chat's terminal has none, Claude runs in it.
+  function rowOf(p) {
+    if (CC.Chats == null) {
+      return null;
+    }
+    if (p.kind === "chat" && p.chatId != null) {
+      return p.chatId;
+    }
+    if (p.kind === "terminal" && p.params != null && p.params.id != null && CC.Chats.chatOfPane(p.params.id) == null) {
+      return "pane:" + p.params.id;
+    }
+    return null;
+  }
+
+  // Cmd+W: a chat or a terminal closes as from its row's ×, so it leaves the list too, with every pane showing it; a terminal's shell ends. Any other pane just closes.
+  function closeShown(p) {
+    const row = rowOf(p);
+    if (row == null) {
+      close(p.id);
+      return;
+    }
+    S.panes.filter(function (x) {
+      return rowOf(x) === row;
+    }).forEach(function (x) {
+      close(x.id);
+    });
+    Promise.resolve(CC.Chats.close(row)).catch(function (e) {
+      console.warn("not closed", row, e);
+      CC.ui.toast("Couldn't close it: " + (e && e.message ? e.message : e), { level: "error" });
+    });
+  }
+
+  // As the pane's own button, or a new chat in the same place when every chat is on screen.
+  function splitChat() {
+    const p = focused();
+    if (p == null || S.sidebarOnly || S.panes.length >= MAX_PANES) {
+      return;
+    }
+    const next = nextChat();
+    if (next != null) {
+      open({ kind: "chat", chatId: next.id }, { beside: true });
+      return;
+    }
+    const row = p.chatId != null && CC.Chats != null ? CC.Chats.get(p.chatId) : null;
+    if (row == null) {
+      return;
+    }
+    CC.Chats.create({ cwd: row.cwd, server: row.server }).then(function (id) {
+      open({ kind: "chat", chatId: id }, { beside: true });
+    }).catch(function (e) {
+      console.warn("couldn't start a chat beside", e);
+      CC.ui.toast("The chat didn't start: " + e.message, { level: "error" });
+    });
+  }
+
+  // What the page with no panes offers: {text, run}, or null for the plain hint.
+  function setEmptyOffer(offer) {
+    emptyText.textContent = offer != null ? offer.text : EMPTY_TEXT;
+    emptyRun = offer != null ? offer.run : null;
+    emptyNew.hidden = offer == null;
   }
 
   function callFocus(p) {
@@ -630,7 +716,11 @@ CC.Shell = (function () {
     sidebarEl.setAttribute("aria-label", "Chats");
     const main = el("main", "cc-main");
     panesEl = el("div", "cc-panes");
-    emptyEl = el("div", "cc-empty cc-empty-panes", "Pick a chat, or start a new one.");
+    emptyEl = el("div", "cc-empty cc-empty-panes");
+    emptyText = el("div", null, EMPTY_TEXT);
+    emptyNew = CC.ui.button({ label: "New chat", primary: true, onClick: function () { emptyRun(); } });
+    emptyNew.hidden = true;
+    emptyEl.append(emptyText, emptyNew);
     main.appendChild(panesEl);
     emptyBar = CC.ui.bar({ cls: "cc-pane-head cc-empty-bar", title: "", lead: [actionEl(SHOW_SIDEBAR)] });
     main.appendChild(emptyEl);
@@ -704,6 +794,10 @@ CC.Shell = (function () {
     });
     CC.Keys.bind("mod+b", { scope: "global", run: toggleSidebar });
     CC.Keys.bind("mod+alt+b", { scope: "global", run: toggleRail });
+    CC.host.app.onBeforeClose(closeFocusedInstead);
+    // Both reach the page once the installer moved Muxy's own. Closing the last pane leaves the empty page, never the app.
+    CC.Keys.bind("cmd+w", { scope: "global", run: closeFocusedPane });
+    CC.Keys.bind("cmd+d", { scope: "global", run: splitChat });
     started = true;
     mountSidebar();
     restorePanes(layout);
@@ -728,6 +822,7 @@ CC.Shell = (function () {
       return S.sidebarOnly;
     },
     sidebar: sidebar,
+    setEmptyOffer: setEmptyOffer,
   };
   return api;
 })();

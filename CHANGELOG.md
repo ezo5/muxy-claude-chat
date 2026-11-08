@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.1.0
+
+- **Terminals are all in the page**: a chat's terminal and every server's terminals are xterm.js panes, no native tabs. `Cmd+T` opens one where
+  New Chat would go, `Cmd+K` clears it, and Muxy asks its consent once per program.
+- **Panes**: `Cmd+D` splits, `Cmd+W` closes the focused pane (a chat or terminal as its row's × does). A chat opened takes a focused terminal or
+  subagent pane instead of going beside it. `Cmd+E` goes back to the last used chat.
+- **Muxy as just the window**: `host/install.sh` moves Muxy's own shortcuts off the keys the app uses and hides its tab strip, sidebar, bars and pane
+  headers. With Muxy 2.4+ it registers the extension and applies this through Muxy's CLI, while Muxy runs.
+
 ## 3.0.0
 
 One Muxy tab is the whole app now: chats sidebar, conversations side by side and a details rail, on one page with one state.
@@ -9,6 +18,7 @@ One Muxy tab is the whole app now: chats sidebar, conversations side by side and
 - **Conversation**: tool work as a summary line, intent rows, then detail in place; view modes Normal, Thinking, Verbose; question and permission cards in the flow; edited files card; find; `/btw` with follow-ups.
 - **Works anywhere**: no installer and no config. The app installs its server package per server, in a folder per version, without touching running daemons. Without Claude Code, Local shows projects and terminals; a remote gets a terminal.
 - **Settings are per server**, in kv on the server. The first run on each server imports what 2.x saved (typography, notifications, sidebar options, default mode, Review options, project order, that server's pins and drafts). Values already set stay.
+- **Terminal in the page**: a terminal is a pane with xterm.js on every server with Python, also a chat continued in a terminal, and its shell survives a reload. Elsewhere it's a native tab.
 - **ticket-board** starts chats through the new `request` op.
 - **Changed**: New Chat is `Cmd+Shift+T`. 2.x's open tabs say where their chat went. `server/setup.py` and `host/install.sh` no longer install the package; they're for the open-file bridge, the statusline wrapper and registering from a checkout.
 - **Removed**: the 2.x extension (background script, page relay, tab index, rescan, title warmup, tab icons, narrow mode, Muxy sidebar), the git row, the minimap, Ticket Board button, server groups' Move to Remote / Local, reader `bind` and `poll {sid}`.

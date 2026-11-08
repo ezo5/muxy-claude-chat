@@ -7,6 +7,11 @@ CC.conversationSample = (function () {
   }
 
   function toolItems(r, id) {
+    // Output without a file name is a command's: path holds the command line.
+    if (r.code != null && r.name == null) {
+      return [{ k: "tool", id: id, name: "Bash", input: { description: r.label, command: r.path } },
+        { k: "result", tid: id, text: r.code.join("\n"), err: r.failed === true }];
+    }
     if (r.code != null) {
       return [{ k: "tool", id: id, name: "Read", input: { file_path: r.path } },
         { k: "result", tid: id, text: r.code.map(function (t, i) {

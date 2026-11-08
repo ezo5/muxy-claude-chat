@@ -65,16 +65,13 @@ CC.links = (function () {
     try {
       await serverOf(ctx).host.call("openUrl", { url: url });
     } catch (e) {
-      Promise.resolve(CC.host.ui.openBrowser(url)).catch(function () {
-        copy(url);
-      });
+      copy(url);
     }
   }
 
   function urlItems(url, ctx) {
     return [
       { label: "Open in default browser", run: function () { openDefault(url, ctx); } },
-      { label: "Open in Muxy browser", run: function () { Promise.resolve(CC.host.ui.openBrowser(url)).catch(function () { copy(url); }); } },
       { label: "Copy link", icon: "copy", run: function () { copy(url); } },
     ];
   }

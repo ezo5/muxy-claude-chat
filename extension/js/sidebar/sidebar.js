@@ -182,10 +182,10 @@ CC.Sidebar = (function () {
       // A diff of another chat beside this one doesn't make that chat the open one.
       const panes = shell.panes();
       const chats = panes.filter(function (p) {
-        return p.kind === "chat";
+        return p.kind === "chat" || p.kind === "terminal";
       });
       S.active = new Set((chats.length > 0 ? chats : panes).map(function (p) {
-        return p.chatId;
+        return p.kind === "terminal" ? "pane:" + p.params.id : p.chatId;
       }).filter(function (id) {
         return id != null;
       }));
@@ -200,6 +200,33 @@ CC.Sidebar = (function () {
       });
     }
 
+    // With no pane open the page sits under the first project where Claude runs, unless one was picked, and offers a chat there.
+    function offerEmptyPage() {
+      if (shell.panes().length > 0) {
+        if (S.autoSelected) {
+          S.selectedProject = null;
+          S.autoSelected = false;
+        }
+        return;
+      }
+      const items = modelNow().items;
+      const first = items.find(function (it) {
+        const server = it.project != null ? CC.Servers.ofProject(it.project.id) : null;
+        return server != null && server.experience === "chat";
+      });
+      if (S.selectedProject == null && first != null) {
+        S.selectedProject = first.key;
+        S.autoSelected = true;
+      }
+      const target = items.find(function (it) {
+        return it.project != null && it.key === S.selectedProject;
+      }) || first;
+      shell.setEmptyOffer(target == null ? null : {
+        text: "No chat open in " + target.label + ".",
+        run: function () { newChat(target.project); },
+      });
+    }
+
     function render() {
       if (dnd.active()) {
         return;
@@ -210,6 +237,7 @@ CC.Sidebar = (function () {
         S.rowOrder = locked;
         save();
       }
+      offerEmptyPage();
       const model = modelNow();
       const numbers = {};
       if (S.numbers) {
@@ -271,6 +299,9 @@ CC.Sidebar = (function () {
       }
       try {
         if (probe != null && probe.experience !== "chat") {
+          if (await CC.PageTerminals.open(server, { cwd: cwd, projectId: project != null ? project.id : server.route })) {
+            return;
+          }
           const pane = await CC.host.terminal.open({ cwd: cwd, projectId: project != null ? project.id : server.route });
           if (pane.paneId != null) {
             await CC.host.terminal.focus(pane.paneId);
@@ -294,6 +325,10 @@ CC.Sidebar = (function () {
     function pick(row, e) {
       S.selectedProject = null;
       render();
+      if (row.kind === "terminal" && CC.PageTerminals.owns(row.paneId)) {
+        CC.PageTerminals.show(row.paneId, { beside: wantsBeside(e) });
+        return;
+      }
       if (row.kind === "terminal") {
         // In a Muxy split the app is then just this list beside the native terminal.
         const was = shell.isSidebarOnly();
@@ -379,6 +414,7 @@ CC.Sidebar = (function () {
     // Muxy's current project can't follow this click: switching it would leave the app's tab. New Chat asks here instead.
     function selectProject(key) {
       S.selectedProject = key;
+      S.autoSelected = false;
       render();
     }
 

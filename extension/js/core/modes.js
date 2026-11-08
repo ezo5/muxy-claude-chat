@@ -74,7 +74,7 @@ CC.Modes = (function () {
     }
     const st = this.p.status();
     if (st === "busy" || st === "waiting") {
-      const choice = await this.p.confirm("Interrupt Claude and switch to the terminal? The current turn is interrupted; the conversation continues in a terminal tab.", ["Switch", "Cancel"]);
+      const choice = await this.p.confirm("Interrupt Claude and switch to the terminal? The current turn is interrupted; the conversation continues in a terminal.", ["Switch", "Cancel"]);
       if (choice !== "Switch") {
         return false;
       }

@@ -412,7 +412,7 @@ CC.Composer = (function () {
 
   Composer.prototype.placeholderFor = function () {
     if (this.status === "terminal") {
-      return "Terminal mode, type in the terminal tab";
+      return "Terminal mode, type in the terminal";
     }
     if (this.cardWaits() || this.status === "waiting") {
       return "Answer above, or queue a message";

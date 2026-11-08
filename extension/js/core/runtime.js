@@ -137,18 +137,22 @@ CC.ChatRuntime = (function () {
       agentStart: function (opts) {
         return agent.start(Object.assign({}, opts, { sessionId: self.id }));
       },
-      listPanes: function () {
-        return CC.host.terminal.list();
+      listPanes: async function () {
+        return (await CC.host.terminal.list()).concat(await CC.PageTerminals.panesOf(self.server));
       },
       // tabs.open uses the current project, so this goes to the chat's server first.
-      openTerminal: function (req) {
+      openTerminal: async function (req) {
+        const id = await CC.PageTerminals.create(self.server, { cwd: req.cwd, command: req.command, projectId: self.server.route });
+        if (id != null) {
+          return { paneId: id, tabId: null };
+        }
         return CC.host.terminal.open(self.server.route != null ? Object.assign({ projectId: self.server.route }, req) : req);
       },
       focusTerminal: function (paneId) {
-        return Promise.resolve(CC.host.terminal.focus(paneId));
+        return Promise.resolve(CC.PageTerminals.focus(paneId, self.server));
       },
       closePane: function (paneId) {
-        return CC.host.terminal.close(paneId);
+        return CC.PageTerminals.owns(paneId) ? CC.PageTerminals.close(paneId, self.server) : CC.host.terminal.close(paneId);
       },
       mirrorStart: function (opts) {
         if (self.disposed) {

@@ -10,6 +10,10 @@ function adopt() {
     say("Couldn't read the terminals: " + why(e));
     return;
   }
+  if (pane == null && isAppProject(activeProject())) {
+    openApp(activeProject(), { kind: "adopt" });
+    return;
+  }
   if (pane == null) {
     say("Focus the terminal with Claude first.");
     return;

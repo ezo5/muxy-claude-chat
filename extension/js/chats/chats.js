@@ -122,6 +122,8 @@ CC.Chats = (function () {
     }
     started = true;
     CC.Servers.on(syncServers);
+    CC.PageTerminals.onChange(changed);
+    CC.PageTerminals.start();
     syncServers();
     loadUi();
     loadProjects();
@@ -219,7 +221,7 @@ CC.Chats = (function () {
   function terminalRow(t) {
     const renamed = ui.titles[t.id];
     // Muxy's list of panes says no project, so until an event does, this goes by the path. See SPEC-multi-server.md, known limit.
-    const server = CC.Servers.ofCwd(t.cwd, t.projectId);
+    const server = (t.server != null ? CC.Servers.get(t.server) : null) || CC.Servers.ofCwd(t.cwd, t.projectId);
     return {
       id: t.id, kind: "terminal", server: server != null ? server.key : null, paneId: t.paneId, title: renamed != null ? renamed.title : t.title, cwd: t.cwd, projectId: t.projectId, state: CC.ChatRows.terminalState(t.status),
       ask: null, req: null, now: null, tool: null, since: t.at, unread: ui.unread.indexOf(t.id) >= 0, updatedAt: t.at, preview: null, model: null, cost: 0, running: [],
@@ -285,6 +287,11 @@ CC.Chats = (function () {
       if (panes[t.paneId] !== true) {
         const row = terminalRow(t);
         list.push(row);
+      }
+    });
+    CC.PageTerminals.rows().forEach(function (t) {
+      if (panes[t.paneId] !== true) {
+        list.push(terminalRow(t));
       }
     });
     // noteState may have added to unread, which the row has to say.
@@ -539,12 +546,13 @@ CC.Chats = (function () {
   // A running terminal Claude becomes a chat: its own one if the overview knows the conversation, else a new one.
   async function adopt(paneId, tabId, projectId) {
     start();
-    const panes = await CC.host.terminal.list();
+    const inPage = CC.PageTerminals.serverOf(paneId);
+    const panes = inPage != null ? await CC.PageTerminals.panesOf(inPage) : await CC.host.terminal.list();
     const pane = panes.find(function (p) {
       return String(p.id) === String(paneId);
     });
     const cwd = pane != null ? pane.workingDirectory || null : null;
-    const server = CC.Servers.ofCwd(cwd, projectId) || CC.Servers.focused();
+    const server = inPage || CC.Servers.ofCwd(cwd, projectId) || CC.Servers.focused();
     const tui = await server.host.call("tuiFind", { cwd: cwd });
     if (tui == null) {
       throw new Error("No running Claude found for " + cwd);
@@ -558,11 +566,19 @@ CC.Chats = (function () {
     return id;
   }
 
+  // The chat running in this terminal, if any.
+  function chatOfPane(paneId) {
+    return Object.keys(ui.terminal).find(function (id) {
+      return String(ui.terminal[id].paneId) === String(paneId);
+    }) || null;
+  }
+
   // Leaves the sidebar; the daemon keeps running until its idle stop, as it does for a closed tab today.
   function close(id) {
     start();
     if (String(id).indexOf("pane:") === 0) {
-      return Promise.resolve(CC.host.terminal.close(id.slice("pane:".length)));
+      const paneId = id.slice("pane:".length);
+      return Promise.resolve(CC.PageTerminals.owns(paneId) ? CC.PageTerminals.close(paneId) : CC.host.terminal.close(paneId));
     }
     const server = serverOfChat(id) || CC.Servers.focused();
     closedNow.set(id, true);
@@ -647,6 +663,7 @@ CC.Chats = (function () {
     open: open,
     create: create,
     adopt: adopt,
+    chatOfPane: chatOfPane,
     close: close,
     rename: rename,
     markRead: markRead,

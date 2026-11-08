@@ -7,6 +7,7 @@
   const NEW_PANE_TRIES = 20;
   const NEW_PANE_WAIT_MS = 100;
   const JOURNAL = "cc-kv-pending:";
+  const PTY_LOADER = 'import sys;s,r=sys.stdin.buffer.read().split(b"\\0",1);g={"__name__":"ptyhost"};exec(s,g);g["client"](r)';
 
   // `project` reaches Muxy only this way: the public exec and execAsync drop it (bridge.js, execPayload). It's the message they send themselves, so consent and limits
   // are the same. Undocumented: a Muxy update can close it, and then CC.host.direct says so.
@@ -443,7 +444,24 @@
       },
     };
 
-    return { probe: probe, call: call, job: job, kv: kv, write: kvWrite };
+    // One request to server/ptyhost.py. Beside the lane, so a key press doesn't wait behind a slow call. As argv, which Muxy's consent remembers by program
+    // ("python3 *", the same rule as the server package's calls); a shell line it would remember word for word. The script goes on stdin: Muxy's dialog lists the
+    // whole command, and with the script in it the buttons end up off screen.
+    async function pty(python, request, timeoutMs) {
+      const res = await withoutWaiting(timeoutMs, function (ms) {
+        return Promise.resolve(route.exec([python, "-I", "-S", "-c", PTY_LOADER], { stdin: CC.PTY_SRC + "\0" + JSON.stringify(request) + "\n", timeoutMs: ms }));
+      }).result;
+      if (res.exitCode !== 0 || res.timedOut) {
+        throw new Error(res.timedOut ? "The terminal's host didn't answer" : (res.stderr || "The terminal's host failed").trim().split("\n").pop());
+      }
+      const answer = JSON.parse(res.stdout);
+      if (answer.error != null) {
+        throw new Error(answer.error);
+      }
+      return answer;
+    }
+
+    return { probe: probe, call: call, job: job, kv: kv, write: kvWrite, pty: pty };
   }
 
   const tab = makeServer(tabRoute, null);
@@ -674,6 +692,10 @@
       onCommand: function (id, fn) {
         return events(["command." + id], fn);
       },
+      // fn() returning true keeps the tab open. Muxy asks on Cmd+W and on an extension reload, update or removal, and doesn't say which.
+      onBeforeClose: function (fn) {
+        return m.lifecycle.onBeforeClose(fn);
+      },
       // A singleton tab's data is replaced when it's opened again.
       onData: function (fn) {
         return typeof m.onDataChange === "function" ? m.onDataChange(fn) : function () {};
@@ -733,9 +755,6 @@
       },
       toast: function (opts) {
         return m.toast({ title: "Claude Chat", body: opts.text });
-      },
-      openBrowser: function (url) {
-        return m.tabs.open({ kind: "browser", url: url });
       },
     },
   };

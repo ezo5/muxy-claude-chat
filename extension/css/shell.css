@@ -23,7 +23,8 @@
 .cc-pane-body { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
 .cc-empty { padding: 40px 22px; color: var(--muted); text-align: center; }
 .cc-moved { height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 22px; color: var(--muted); text-align: center; }
-.cc-empty-panes { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+.cc-empty-panes { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 12px; align-items: center; justify-content: center; }
+.cc-empty-panes .cc-btn[hidden] { display: none; }
 .cc-empty-panes[hidden] { display: none; }
 .cc-empty-bar { position: absolute; top: 0; left: 0; right: 0; z-index: 1; }
 .cc-empty-bar[hidden] { display: none; }

@@ -25,11 +25,15 @@ CC.Navigate = (function () {
   }
 
   async function go(id) {
-    if (String(id).indexOf("pane:") === 0) {
+    if (String(id).indexOf("pane:") === 0 && !CC.PageTerminals.owns(id.slice("pane:".length))) {
       await CC.host.terminal.focus(id.slice("pane:".length));
       return;
     }
     await focusApp();
+    if (String(id).indexOf("pane:") === 0) {
+      CC.PageTerminals.show(id.slice("pane:".length));
+      return;
+    }
     CC.Shell.open({ kind: "chat", chatId: id });
   }
 
@@ -109,6 +113,37 @@ CC.Navigate = (function () {
     }
   }
 
+  // Where Cmd+T opens, as New Chat decides: the project picked in the sidebar, else the shown chat's or terminal's folder, else the first project of the server the app
+  // works on. {server, cwd, projectId}.
+  async function terminalPlace() {
+    const picked = CC.Sidebar != null ? CC.Sidebar.selectedProject() : null;
+    if (picked != null && CC.Servers.ofProject(picked.id) != null) {
+      return { server: CC.Servers.ofProject(picked.id), cwd: picked.path || null, projectId: picked.id };
+    }
+    const pane = CC.Shell.focused();
+    const row = pane != null && pane.chatId != null ? CC.Chats.get(pane.chatId) : null;
+    if (row != null && CC.Servers.get(row.server) != null) {
+      return { server: CC.Servers.get(row.server), cwd: row.cwd || null, projectId: row.projectId };
+    }
+    const shell = pane != null && pane.kind === "terminal" ? CC.PageTerminals.where(pane.params.id) : null;
+    if (shell != null && CC.Servers.get(shell.server) != null) {
+      return { server: CC.Servers.get(shell.server), cwd: shell.cwd || null, projectId: shell.project };
+    }
+    const server = CC.Servers.focused();
+    const first = server != null ? (await CC.host.projects.list()).find(function (p) {
+      return server.projectIds.indexOf(String(p.id)) >= 0;
+    }) : null;
+    return { server: server, cwd: first != null ? first.path : null, projectId: first != null ? first.id : null };
+  }
+
+  async function newTerminal() {
+    const where = await terminalPlace();
+    const opened = where.server != null && await CC.PageTerminals.open(where.server, { cwd: where.cwd, projectId: where.projectId != null ? where.projectId : where.server.route });
+    if (!opened) {
+      CC.ui.toast("Terminals there need Python", { level: "error" });
+    }
+  }
+
   function command(id, run) {
     CC.host.app.onCommand(id, async function () {
       const front = CC.Presence.inFront();
@@ -142,6 +177,9 @@ CC.Navigate = (function () {
     // The project it came from says the server; a path alone may be on two.
     const server = (intent.projectId != null ? CC.Servers.ofProject(intent.projectId) : null) || CC.Servers.ofCwd(cwd) || CC.Servers.focused();
     if (CC.probeCore.noChats(await server.host.probe().catch(function () { return null; }))) {
+      if (await CC.PageTerminals.open(server, { cwd: cwd, projectId: intent.projectId != null ? intent.projectId : server.route })) {
+        return;
+      }
       const pane = await CC.host.terminal.open({ cwd: cwd, projectId: server.route });
       if (pane.paneId != null) {
         await CC.host.terminal.focus(pane.paneId);
@@ -156,7 +194,13 @@ CC.Navigate = (function () {
     if (CC.Chats.adopt == null) {
       throw new Error("this view has no terminals to adopt");
     }
-    const id = await CC.Chats.adopt(intent.paneId, intent.tabId != null ? intent.tabId : null, intent.projectId);
+    // No pane from the script: Muxy can't see inside the page, so it may be the terminal focused here.
+    const focused = CC.Shell.focused();
+    const paneId = intent.paneId != null ? intent.paneId : focused != null && focused.kind === "terminal" ? focused.params.id : null;
+    if (paneId == null) {
+      throw new Error("Focus the terminal with Claude first.");
+    }
+    const id = await CC.Chats.adopt(paneId, intent.tabId != null ? intent.tabId : null, intent.projectId);
     CC.Shell.open({ kind: "chat", chatId: id });
   }
 
@@ -218,6 +262,7 @@ CC.Navigate = (function () {
     });
     command("last-chat", last);
     // Not Muxy commands: Muxy keeps this combination for terminals, and a manifest shortcut it already uses would simply not bind.
+    CC.Keys.bind("cmd+t", { scope: "global", run: function () { newTerminal().catch(function (e) { report("The terminal didn't open", e); }); } });
     CC.Keys.bind("mod+shift+arrowup", { scope: "global", run: function () { stepChats(-1); } });
     CC.Keys.bind("mod+shift+arrowdown", { scope: "global", run: function () { stepChats(1); } });
     for (let n = 1; n <= MAX_NUMBERED; n++) {

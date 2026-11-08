@@ -1,5 +1,5 @@
 // Chat or terminal, on the chat pane: the header control, Ctrl+backtick, and the bar that stands in for the composer while the
-// conversation runs in a terminal tab. The logic is CC.Modes; this only asks the runtime. Wraps the W0 pane kind, because a real
+// conversation runs in a terminal. The logic is CC.Modes; this only asks the runtime. Wraps the W0 pane kind, because a real
 // factory in the `composer` slot would push out what fills it.
 (function () {
   CC.icons.chat = '<path d="M21 12a8 8 0 0 1-8 8H4l2.3-3A8 8 0 1 1 21 12z"/>';
@@ -66,7 +66,7 @@
     }
     if (st.paneId != null && st.tuiGone !== true) {
       bar.appendChild(CC.ui.button({ label: "Show terminal", onClick: function () {
-        Promise.resolve(CC.host.terminal.focus(st.paneId)).catch(function (e) {
+        Promise.resolve(CC.PageTerminals.focus(st.paneId, rt.server)).catch(function (e) {
           CC.ui.toast("Couldn't show the terminal: " + e.message, { level: "error" });
         });
       } }));

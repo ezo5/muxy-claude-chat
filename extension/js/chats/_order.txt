@@ -1,3 +1,4 @@
+page-terminals.js
 terminals.js
 rows.js
 chats.js

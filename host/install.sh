@@ -14,6 +14,7 @@ BRIDGE_SCRIPT=$SUPPORT_DIR/open-bridge.zsh
 AGENTS_DIR=$HOME/Library/LaunchAgents
 BRIDGE_DIRNAME=.claude-chat-bridge
 OLD_AGENT=$HOME/Library/LaunchAgents/app.muxy.cmd-watch.plist
+KEYMAP_PY=${0:A:h}/keymap.py
 MIN_BETA=1106
 
 usage() {
@@ -22,7 +23,8 @@ Usage: host/install.sh [options]
 
 Sets up claude-chat for Muxy 2.x on this Mac:
   1. builds $EXT_DIR/dist if needed, registers $EXT_DIR as an unpacked extension and enables it
-     (only while Muxy is not running; otherwise prints the manual steps),
+     (through the muxy CLI in Muxy's bundle, 2.4.0 or newer, which starts Muxy if needed;
+     otherwise prints the manual steps),
   2. with --statusline or --open-bridge, runs server/setup.py on each target (--local and/or --server).
      The server package itself needs no step: the app installs it when it first opens on a server,
   3. with --open-bridge, installs one LaunchAgent $LABEL.<server> per server.
@@ -54,6 +56,9 @@ Overrides:
   --app PATH              Muxy app bundle (default: /Applications/Muxy Beta.app, then Muxy.app).
   --profile DIR           Muxy profile folder (default: ~/Library/Application Support/Muxy Beta).
   --no-register           Skip extension registration.
+  --no-keymap             Leave Muxy as it is. By default Muxy becomes only the window of the app: its shortcuts move
+                          to unused keys and its tab strip, sidebar, bars and pane headers go away (a running Muxy
+                          reloads them; settings.toml is backed up). Its menus stay, and --uninstall brings the defaults back.
 
 Example:
   host/install.sh --server devbox --statusline --open-bridge ~/vm-share:/home/me
@@ -106,11 +111,7 @@ function run(a) {
   var o, x;
   switch (a[0]) {
     case "get": x = obj(a[1])[a[2]]; return x === undefined || x === null ? "" : String(x);
-    case "map-set": o = obj(a[1]); o[a[2]] = a[3]; return JSON.stringify(o);
-    case "map-del": o = obj(a[1]); delete o[a[2]]; return JSON.stringify(o);
     case "set-has": return arr(a[1]).indexOf(a[2]) >= 0 ? "1" : "0";
-    case "set-add": x = arr(a[1]); if (x.indexOf(a[2]) < 0) x.push(a[2]); x.sort(); return JSON.stringify(x);
-    case "set-del": x = arr(a[1]).filter(function (v) { return v !== a[2]; }); return JSON.stringify(x);
     case "summary":
       o = JSON.parse(a[1]);
       if (!o || typeof o !== "object") return brief(o);
@@ -130,7 +131,7 @@ jxa() { /usr/bin/osascript -l JavaScript -e "$JXA" "$@" }
 
 # ---------- arguments ----------
 typeset -a servers targets
-want_local=0 statusline=0 bridge_poll=0 app_opt= profile_opt= register=1 mode=install dry=0
+want_local=0 statusline=0 bridge_poll=0 app_opt= profile_opt= register=1 keymap=1 mode=install dry=0
 typeset -a bridge_specs
 typeset -A bridge_host_of bridge_server_of
 while (( $# )); do
@@ -145,6 +146,7 @@ while (( $# )); do
     --app) (( $# >= 2 )) || die "--app needs a path"; app_opt=$2; shift ;;
     --profile) (( $# >= 2 )) || die "--profile needs a path"; profile_opt=$2; shift ;;
     --no-register) register=0 ;;
+    --no-keymap) keymap=0 ;;
     --check) mode=check ;;
     --uninstall) mode=uninstall ;;
     -n|--dry-run) dry=1 ;;
@@ -182,9 +184,14 @@ for spec in $bridge_specs; do
 done
 
 # ---------- Muxy ----------
-app= app_version= profile= ext_name= ext_path=
+app= app_version= profile= ext_name= ext_path= muxy_cli=
 plist_get() { /usr/bin/plutil -extract $2 raw -o - $1 2>/dev/null }
 muxy_running() { /usr/bin/pgrep -x muxy-app >/dev/null 2>&1 }
+# From 2.4 the CLI in the bundle loads extensions and has the app reload settings.toml, also while it runs. A command that
+# needs the app starts it.
+muxy_cmd() {
+  if (( dry )); then act $muxy_cli "$@"; else MUXY_DIR=$profile $muxy_cli "$@" >/dev/null; fi
+}
 
 detect_muxy() {
   local -a cands
@@ -212,6 +219,12 @@ detect_muxy() {
     warn "Muxy 2.x not found in /Applications or ~/Applications (use --app if it lives elsewhere)"
   else
     ok "${app:t} $app_version"
+    if [[ $app_version == (#b)([0-9]##).([0-9]##).* ]] && (( match[1] > 2 || (match[1] == 2 && match[2] >= 4) )) \
+        && [[ -x $app/Contents/MacOS/muxy ]]; then
+      muxy_cli=$app/Contents/MacOS/muxy
+    else
+      warn "Muxy $app_version is older than 2.4.0: the extension is registered by hand and Muxy has to be quit for its shortcuts"
+    fi
     if [[ $app_version == (#b)*-beta.([0-9]##)* ]] && (( match[1] < MIN_BETA )); then
       warn "Muxy $app_version is older than 2.0.0-beta.$MIN_BETA; remote [[servers]] need beta.$MIN_BETA or newer"
     fi
@@ -248,8 +261,31 @@ warn_keymap() {
   print -r -- $lines | sed 's/^/      /'
 }
 
+# Muxy is only the window of the app: its shortcuts and chrome go away. See keymap.py.
+apply_keymap() { # <apply|remove>
+  local settings=$profile/settings.toml backup
+  if (( ! keymap )); then say "shortcuts: skipped (--no-keymap)"; return; fi
+  [[ -d $profile ]] || return 0
+  find_local_python || { warn "python3 not found on this Mac; Muxy's shortcuts stay as they are"; return }
+  if muxy_running && [[ -z $muxy_cli ]]; then
+    warn "Muxy is running; it keeps its shortcuts in memory and would overwrite them"
+    manual+=("Quit Muxy (Cmd+Q) and run this again, so that Muxy's shortcuts and chrome stop getting in the way of the app.")
+    return
+  fi
+  if (( ! dry )) && [[ -f $settings ]]; then
+    backup=$SUPPORT_DIR/backup/$(date +%Y%m%d-%H%M%S)
+    mkdir -p -- $backup && cp -p -- $settings $backup/
+  fi
+  act $local_python $KEYMAP_PY $1 $settings || { fail "keymap.py $1 failed"; return }
+  if muxy_running; then
+    muxy_cmd config reload || { fail "muxy config reload failed; restart Muxy to apply its shortcuts"; return }
+  fi
+  ok "Muxy's shortcuts: $1 done${backup:+ (previous settings.toml in $backup)}"
+  done_items+=("Muxy's shortcuts: $1")
+}
+
 register_extension() {
-  local folders=$profile/extension-folders.json enabled=$profile/extension-enabled.json old on backup
+  local folders=$profile/extension-folders.json enabled=$profile/extension-enabled.json old on
   if (( ! register )); then say "skipped (--no-register)"; manual_register; return; fi
   if [[ ! -d $profile ]]; then say "no profile folder; register by hand"; manual_register; return; fi
   old=$(jxa get $folders $ext_name) || { warn "cannot read $folders"; manual_register; return }
@@ -259,54 +295,43 @@ register_extension() {
     warn "a packaged $ext_name is installed in $profile/extensions; remove it in Settings -> Extensions first"
     manual_register; return
   fi
-  if muxy_running; then
-    warn "Muxy is running; it keeps these settings in memory and would overwrite them"
-    say "quit Muxy (Cmd+Q) and run this again, or register by hand"
-    manual_register; return
+  [[ -n $muxy_cli ]] || { manual_register; return }
+  if [[ -n $old && $old != $ext_path ]]; then
+    say "replacing the previous folder: $old (Muxy forgets the permission answers given to it)"
+    muxy_cmd extension unload $ext_name || { fail "muxy extension unload $ext_name failed"; manual_register; return }
   fi
-  [[ -n $old && $old != $ext_path ]] && say "replacing the previous folder: $old"
-  backup=$SUPPORT_DIR/backup/$(date +%Y%m%d-%H%M%S)
-  act mkdir -p $backup
-  [[ -f $folders ]] && act cp -p $folders $backup/
-  [[ -f $enabled ]] && act cp -p $enabled $backup/
-  write_file $folders "$(jxa map-set $folders $ext_name $ext_path)" || die "cannot write $folders"
-  write_file $enabled "$(jxa set-add $enabled $ext_name)" || die "cannot write $enabled"
-  ok "registered $ext_name -> $ext_path (enabled; previous files backed up to $backup)"
+  muxy_cmd extension load $ext_path && muxy_cmd extension enable $ext_name \
+    || { fail "muxy extension load/enable failed"; manual_register; return }
+  ok "registered $ext_name -> $ext_path (enabled)"
   done_items+=("Extension $ext_name registered and enabled in ${profile:t}")
 }
 
 # The preview id of the same app, from before 3.0: it would keep running beside this one, on stale files.
 drop_preview() {
-  local folders=$profile/extension-folders.json enabled=$profile/extension-enabled.json
   (( register )) && [[ -d $profile ]] || return 0
-  [[ -n $(jxa get $folders claude-chat-next 2>/dev/null) ]] || return 0
-  if muxy_running; then
+  [[ -n $(jxa get $profile/extension-folders.json claude-chat-next 2>/dev/null) ]] || return 0
+  if [[ -z $muxy_cli ]] || ! muxy_cmd extension unload claude-chat-next; then
     manual+=("In Muxy: Settings -> Extensions -> claude-chat-next -> Remove.")
     return 0
   fi
-  write_file $folders "$(jxa map-del $folders claude-chat-next)" || die "cannot write $folders"
-  write_file $enabled "$(jxa set-del $enabled claude-chat-next)" || die "cannot write $enabled"
   ok "removed the preview registration claude-chat-next"
   done_items+=("Preview registration claude-chat-next removed")
 }
 
 unregister_extension() {
-  local folders=$profile/extension-folders.json enabled=$profile/extension-enabled.json old
+  local old
   if (( ! register )) || [[ ! -d $profile ]]; then
     manual+=("In Muxy: Settings -> Extensions -> $ext_name -> Remove."); return
   fi
-  old=$(jxa get $folders $ext_name) || { warn "cannot read $folders"; return }
+  old=$(jxa get $profile/extension-folders.json $ext_name) || { warn "cannot read $profile/extension-folders.json"; return }
   if [[ -z $old ]]; then ok "$ext_name is not registered as an unpacked folder"; return; fi
   if [[ $old != $ext_path ]]; then
     warn "$ext_name points to $old, not to this checkout; left alone"; return
   fi
-  if muxy_running; then
-    warn "Muxy is running; quit it and run --uninstall again, or remove it by hand"
+  if [[ -z $muxy_cli ]] || ! muxy_cmd extension unload $ext_name; then
     manual+=("In Muxy: Settings -> Extensions -> $ext_name -> Remove."); return
   fi
-  write_file $folders "$(jxa map-del $folders $ext_name)" || die "cannot write $folders"
-  write_file $enabled "$(jxa set-del $enabled $ext_name)" || die "cannot write $enabled"
-  ok "removed $ext_name from ${profile:t} (its storage and permission answers stay in the profile)"
+  ok "removed $ext_name from ${profile:t} (Muxy forgets its permission answers)"
   done_items+=("Extension registration removed")
 }
 
@@ -587,6 +612,7 @@ case $mode in
       [[ $local_on == 1 ]] && ok "enabled" || warn "not enabled"
       [[ -f $EXT_DIR/dist/package.json ]] && ok "built" || warn "$EXT_DIR/dist is missing; run $EXT_DIR/build.py --no-sample"
       warn_keymap
+      find_local_python && say "Muxy's shortcuts: $($local_python $KEYMAP_PY check $profile/settings.toml)"
     fi
     step "Servers"
     note_servers
@@ -597,6 +623,7 @@ case $mode in
   uninstall)
     step "Extension"
     unregister_extension
+    apply_keymap remove
     step "Open-file bridge"
     uninstall_bridge
     step "Servers"
@@ -612,6 +639,7 @@ case $mode in
     register_extension
     drop_preview
     warn_keymap
+    apply_keymap apply
     step "Servers"
     note_servers
     [[ -f $SETUP_PY ]] || { (( ${#targets} )) && die "$SETUP_PY not found; update the checkout" }
@@ -625,7 +653,6 @@ case $mode in
     fi
     [[ -f $OLD_AGENT ]] && notes+=("app.muxy.cmd-watch (old cmd-bridge) is not needed by claude-chat; keep it only if you use it for other things.")
     manual+=("On first use, allow and remember Muxy's prompts: the server check (a shell line), python3, a terminal tab per command (chat -> terminal).")
-    notes+=("Optional: Muxy Settings -> Appearance, layout Tab Focused with the built-in sidebar collapsed gives the app the whole window.")
     ;;
 esac
 
@@ -635,7 +662,7 @@ elif (( ! dry )); then say "nothing changed"; fi
 for x in $manual; do say "${B}manual:${N} $x"; done
 for x in $notes; do say "note: $x"; done
 if [[ $mode == install ]]; then
-  say "update: git pull, $EXT_DIR/build.py --no-sample, then Settings -> Extensions -> $ext_name -> Reload (re-run this script if host/ or statusline.py changed)"
+  say "update: git pull, $EXT_DIR/build.py --no-sample, then ${muxy_cli:+${(q-)muxy_cli} extension reload $ext_name or }Settings -> Extensions -> $ext_name -> Reload (re-run this script if host/ or statusline.py changed)"
   say "check:  ${(q-)SCRIPT} --check $target_flags"
   say "remove: ${(q-)SCRIPT} --uninstall $target_flags"
 fi
